@@ -1,0 +1,43 @@
+version: '3.8'
+
+# Development compose file - runs only the database
+# Use with: docker-compose -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: training-dev-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=training
+      - POSTGRES_PASSWORD=training_dev_password
+      - POSTGRES_DB=training
+    ports:
+      - "5432:5432"
+    volumes:
+      - dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U training"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional: Cal.com for local development
+  # Uncomment if you need to test Cal.com integration locally
+
+  # calcom-postgres:
+  #   image: postgres:16-alpine
+  #   container_name: training-dev-calcom-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     - POSTGRES_USER=calcom
+  #     - POSTGRES_PASSWORD=calcom_dev_password
+  #     - POSTGRES_DB=calcom
+  #   ports:
+  #     - "5433:5432"
+  #   volumes:
+  #     - dev-calcom-pgdata:/var/lib/postgresql/data
+
+volumes:
+  dev-pgdata:
+  # dev-calcom-pgdata:

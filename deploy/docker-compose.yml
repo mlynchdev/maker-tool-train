@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+    container_name: training-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://training:${POSTGRES_PASSWORD}@postgres:5432/training
+      - CALCOM_API_URL=http://calcom-api:5555
+      - CALCOM_API_KEY=${CALCOM_API_KEY}
+      - CALCOM_WEBHOOK_SECRET=${CALCOM_WEBHOOK_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - AUTH_PROVIDER=dev
+      - PUBLIC_URL=${PUBLIC_URL:-https://training.example.com}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+      - public
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: training-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=training
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=training
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U training"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Cal.com Web UI (Admin only - not publicly exposed)
+  calcom-web:
+    image: calcom/cal.com:latest
+    container_name: training-calcom-web
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://calcom:${CALCOM_DB_PASSWORD}@calcom-postgres:5432/calcom
+      - NEXTAUTH_SECRET=${CALCOM_NEXTAUTH_SECRET}
+      - CALENDSO_ENCRYPTION_KEY=${CALCOM_ENCRYPTION_KEY}
+      - NEXT_PUBLIC_WEBAPP_URL=http://localhost:3001
+      - NEXT_PUBLIC_API_V2_URL=http://calcom-api:5555
+    depends_on:
+      calcom-postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    # Note: Not exposed publicly - access via VPN or internal network only
+
+  # Cal.com API v2 (Internal only)
+  calcom-api:
+    image: calcom/api-v2:latest
+    container_name: training-calcom-api
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://calcom:${CALCOM_DB_PASSWORD}@calcom-postgres:5432/calcom
+      - API_KEY_PREFIX=cal_
+      - JWT_SECRET=${CALCOM_JWT_SECRET}
+    depends_on:
+      calcom-postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    # Note: Only accessible within Docker network
+
+  # Cal.com Database
+  calcom-postgres:
+    image: postgres:16-alpine
+    container_name: training-calcom-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=calcom
+      - POSTGRES_PASSWORD=${CALCOM_DB_PASSWORD}
+      - POSTGRES_DB=calcom
+    volumes:
+      - calcom-pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calcom"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Reverse proxy (publicly exposed)
+  caddy:
+    image: caddy:2-alpine
+    container_name: training-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    networks:
+      - internal
+      - public
+
+networks:
+  internal:
+    driver: bridge
+  public:
+    driver: bridge
+
+volumes:
+  pgdata:
+  calcom-pgdata:
+  caddy-data:
+  caddy-config:
