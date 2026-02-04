@@ -2,6 +2,7 @@ import { createServerFn } from '@tanstack/start'
 import { z } from 'zod'
 import { eq, and, desc, asc } from 'drizzle-orm'
 import { requireManager, requireAdmin } from '../auth'
+import { normalizeYouTubeId } from '~/lib/youtube'
 import {
   db,
   users,
@@ -365,12 +366,17 @@ export const createTrainingModule = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     await requireAdmin()
 
+    const normalizedVideoId = normalizeYouTubeId(data.youtubeVideoId)
+    if (!normalizedVideoId) {
+      return { success: false, error: 'Invalid YouTube URL or ID.' }
+    }
+
     const [module] = await db
       .insert(trainingModules)
       .values({
         title: data.title,
         description: data.description,
-        youtubeVideoId: data.youtubeVideoId,
+        youtubeVideoId: normalizedVideoId,
         durationSeconds: data.durationSeconds,
       })
       .returning()
@@ -395,11 +401,20 @@ export const updateTrainingModule = createServerFn({ method: 'POST' })
     await requireAdmin()
 
     const { moduleId, ...updates } = data
+    let normalizedVideoId: string | undefined
+
+    if (updates.youtubeVideoId) {
+      normalizedVideoId = normalizeYouTubeId(updates.youtubeVideoId)
+      if (!normalizedVideoId) {
+        return { success: false, error: 'Invalid YouTube URL or ID.' }
+      }
+    }
 
     const [module] = await db
       .update(trainingModules)
       .set({
         ...updates,
+        ...(normalizedVideoId ? { youtubeVideoId: normalizedVideoId } : {}),
         updatedAt: new Date(),
       })
       .where(eq(trainingModules.id, moduleId))

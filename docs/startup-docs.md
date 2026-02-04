@@ -87,6 +87,15 @@ bun run dev
 
 The app will be available at http://localhost:3000
 
+---
+
+## Admin Workflow: Training Modules
+
+1. Log in as an admin account.
+2. Go to `Admin > Training` to manage modules.
+3. Add a module by pasting a YouTube URL or ID; the preview auto-detects duration.
+4. Save the module, then assign it to machines in `Admin > Machines`.
+
 ### Database Studio
 
 To explore the database visually:

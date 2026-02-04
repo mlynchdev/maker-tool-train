@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { loadYouTubeIframeAPI } from '~/lib/youtube-iframe'
 
 declare global {
   interface Window {
@@ -20,24 +21,6 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0 }: YouT
   const lastUpdateRef = useRef<number>(Date.now())
   const watchedSecondsRef = useRef<number>(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const loadYouTubeAPI = useCallback(() => {
-    return new Promise<void>((resolve) => {
-      if (window.YT && window.YT.Player) {
-        resolve()
-        return
-      }
-
-      const tag = document.createElement('script')
-      tag.src = 'https://www.youtube.com/iframe_api'
-      const firstScriptTag = document.getElementsByTagName('script')[0]
-      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag)
-
-      window.onYouTubeIframeAPIReady = () => {
-        resolve()
-      }
-    })
-  }, [])
 
   const trackProgress = useCallback(() => {
     if (!playerRef.current) return
@@ -68,7 +51,7 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0 }: YouT
     let mounted = true
 
     const initPlayer = async () => {
-      await loadYouTubeAPI()
+      await loadYouTubeIframeAPI()
 
       if (!mounted || !containerRef.current) return
 
@@ -115,7 +98,7 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0 }: YouT
         playerRef.current = null
       }
     }
-  }, [videoId, loadYouTubeAPI, initialPosition, onProgress])
+  }, [videoId, initialPosition, onProgress])
 
   // Set up progress tracking interval
   useEffect(() => {
