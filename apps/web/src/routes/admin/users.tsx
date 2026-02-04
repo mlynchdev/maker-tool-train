@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { desc } from 'drizzle-orm'
 import { useState } from 'react'
 import { requireAdmin } from '~/server/auth/middleware'
@@ -33,7 +33,7 @@ function AdminUsersPage() {
     setUpdating(userId)
 
     try {
-      const result = await updateUser({ data: { userId, role } })
+      const result = await updateUser({ userId, role })
 
       if (result.success) {
         setUserList((prev) =>
@@ -51,7 +51,7 @@ function AdminUsersPage() {
     setUpdating(userId)
 
     try {
-      const result = await updateUser({ data: { userId, status } })
+      const result = await updateUser({ userId, status })
 
       if (result.success) {
         setUserList((prev) =>

@@ -19,7 +19,9 @@ function LoginPage() {
     setLoading(true)
 
     try {
+      console.log('Calling login with:', { email, password })
       const result = await login({ data: { email, password } })
+      console.log('Login result:', result)
 
       if (result.success) {
         navigate({ to: '/' })
@@ -27,6 +29,7 @@ function LoginPage() {
         setError(result.error || 'Login failed')
       }
     } catch (err) {
+      console.error('Login error:', err)
       setError('An error occurred. Please try again.')
     } finally {
       setLoading(false)

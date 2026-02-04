@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Development compose file - runs only the database
 # Use with: docker-compose -f docker-compose.dev.yml up -d
 
@@ -13,7 +11,7 @@ services:
       - POSTGRES_PASSWORD=training_dev_password
       - POSTGRES_DB=training
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - dev-pgdata:/var/lib/postgresql/data
     healthcheck:

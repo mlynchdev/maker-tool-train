@@ -22,6 +22,8 @@ import { Route as AdminTrainingRouteImport } from './routes/admin/training'
 import { Route as AdminMachinesRouteImport } from './routes/admin/machines'
 import { Route as AdminCheckoutsRouteImport } from './routes/admin/checkouts'
 import { Route as MachinesMachineIdReserveRouteImport } from './routes/machines/$machineId.reserve'
+import { Route as ApiWebhooksCalcomRouteImport } from './routes/api/webhooks.calcom'
+import { Route as ApiSseBookingsRouteImport } from './routes/api/sse.bookings'
 import { Route as AdminMachinesMachineIdRouteImport } from './routes/admin/machines.$machineId'
 import { Route as AdminCheckoutsUserIdRouteImport } from './routes/admin/checkouts.$userId'
 
@@ -91,6 +93,16 @@ const MachinesMachineIdReserveRoute =
     path: '/reserve',
     getParentRoute: () => MachinesMachineIdRoute,
   } as any)
+const ApiWebhooksCalcomRoute = ApiWebhooksCalcomRouteImport.update({
+  id: '/api/webhooks/calcom',
+  path: '/api/webhooks/calcom',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSseBookingsRoute = ApiSseBookingsRouteImport.update({
+  id: '/api/sse/bookings',
+  path: '/api/sse/bookings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminMachinesMachineIdRoute = AdminMachinesMachineIdRouteImport.update({
   id: '/$machineId',
   path: '/$machineId',
@@ -117,6 +129,8 @@ export interface FileRoutesByFullPath {
   '/training/': typeof TrainingIndexRoute
   '/admin/checkouts/$userId': typeof AdminCheckoutsUserIdRoute
   '/admin/machines/$machineId': typeof AdminMachinesMachineIdRoute
+  '/api/sse/bookings': typeof ApiSseBookingsRoute
+  '/api/webhooks/calcom': typeof ApiWebhooksCalcomRoute
   '/machines/$machineId/reserve': typeof MachinesMachineIdReserveRoute
 }
 export interface FileRoutesByTo {
@@ -134,6 +148,8 @@ export interface FileRoutesByTo {
   '/training': typeof TrainingIndexRoute
   '/admin/checkouts/$userId': typeof AdminCheckoutsUserIdRoute
   '/admin/machines/$machineId': typeof AdminMachinesMachineIdRoute
+  '/api/sse/bookings': typeof ApiSseBookingsRoute
+  '/api/webhooks/calcom': typeof ApiWebhooksCalcomRoute
   '/machines/$machineId/reserve': typeof MachinesMachineIdReserveRoute
 }
 export interface FileRoutesById {
@@ -152,6 +168,8 @@ export interface FileRoutesById {
   '/training/': typeof TrainingIndexRoute
   '/admin/checkouts/$userId': typeof AdminCheckoutsUserIdRoute
   '/admin/machines/$machineId': typeof AdminMachinesMachineIdRoute
+  '/api/sse/bookings': typeof ApiSseBookingsRoute
+  '/api/webhooks/calcom': typeof ApiWebhooksCalcomRoute
   '/machines/$machineId/reserve': typeof MachinesMachineIdReserveRoute
 }
 export interface FileRouteTypes {
@@ -171,6 +189,8 @@ export interface FileRouteTypes {
     | '/training/'
     | '/admin/checkouts/$userId'
     | '/admin/machines/$machineId'
+    | '/api/sse/bookings'
+    | '/api/webhooks/calcom'
     | '/machines/$machineId/reserve'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -188,6 +208,8 @@ export interface FileRouteTypes {
     | '/training'
     | '/admin/checkouts/$userId'
     | '/admin/machines/$machineId'
+    | '/api/sse/bookings'
+    | '/api/webhooks/calcom'
     | '/machines/$machineId/reserve'
   id:
     | '__root__'
@@ -205,6 +227,8 @@ export interface FileRouteTypes {
     | '/training/'
     | '/admin/checkouts/$userId'
     | '/admin/machines/$machineId'
+    | '/api/sse/bookings'
+    | '/api/webhooks/calcom'
     | '/machines/$machineId/reserve'
   fileRoutesById: FileRoutesById
 }
@@ -221,6 +245,8 @@ export interface RootRouteChildren {
   MachinesIndexRoute: typeof MachinesIndexRoute
   ReservationsIndexRoute: typeof ReservationsIndexRoute
   TrainingIndexRoute: typeof TrainingIndexRoute
+  ApiSseBookingsRoute: typeof ApiSseBookingsRoute
+  ApiWebhooksCalcomRoute: typeof ApiWebhooksCalcomRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -316,6 +342,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MachinesMachineIdReserveRouteImport
       parentRoute: typeof MachinesMachineIdRoute
     }
+    '/api/webhooks/calcom': {
+      id: '/api/webhooks/calcom'
+      path: '/api/webhooks/calcom'
+      fullPath: '/api/webhooks/calcom'
+      preLoaderRoute: typeof ApiWebhooksCalcomRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/sse/bookings': {
+      id: '/api/sse/bookings'
+      path: '/api/sse/bookings'
+      fullPath: '/api/sse/bookings'
+      preLoaderRoute: typeof ApiSseBookingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/machines/$machineId': {
       id: '/admin/machines/$machineId'
       path: '/$machineId'
@@ -381,7 +421,18 @@ const rootRouteChildren: RootRouteChildren = {
   MachinesIndexRoute: MachinesIndexRoute,
   ReservationsIndexRoute: ReservationsIndexRoute,
   TrainingIndexRoute: TrainingIndexRoute,
+  ApiSseBookingsRoute: ApiSseBookingsRoute,
+  ApiWebhooksCalcomRoute: ApiWebhooksCalcomRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+  }
+}

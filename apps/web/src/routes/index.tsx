@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { getAuthUser } from '~/server/auth/middleware'
 import { Dashboard } from '~/components/Dashboard'
 import { LandingPage } from '~/components/LandingPage'

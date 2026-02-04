@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { getAuthUser, requireAuth } from '~/server/auth/middleware'
 import { getAllModulesWithProgress } from '~/server/services/training'
 import { Header } from '~/components/Header'

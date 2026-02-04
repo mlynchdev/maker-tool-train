@@ -1,4 +1,4 @@
-import { getWebRequest } from 'vinxi/http'
+import { getRequest } from '@tanstack/react-start/server'
 import { getAuthService } from './dev-auth'
 import { SESSION_COOKIE_NAME, type AuthUser, type UserRole } from './types'
 
@@ -14,7 +14,7 @@ function parseCookies(cookieHeader: string): Record<string, string> {
 }
 
 export async function getAuthUser(): Promise<AuthUser | null> {
-  const request = getWebRequest()
+  const request = getRequest()
   const cookieHeader = request.headers.get('cookie')
 
   if (!cookieHeader) {

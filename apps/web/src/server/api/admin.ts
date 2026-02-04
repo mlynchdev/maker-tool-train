@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { eq, and, desc, asc } from 'drizzle-orm'
 import { requireManager, requireAdmin } from '../auth'
@@ -90,7 +90,7 @@ export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
 )
 
 export const getUserForCheckout = createServerFn({ method: 'GET' })
-  .validator((data: unknown) => z.object({ userId: z.string().uuid() }).parse(data))
+  .inputValidator((data: unknown) => z.object({ userId: z.string().uuid() }).parse(data))
   .handler(async ({ data }) => {
     await requireManager()
 
@@ -161,7 +161,7 @@ const approveCheckoutSchema = z.object({
 })
 
 export const approveCheckout = createServerFn({ method: 'POST' })
-  .validator((data: unknown) => approveCheckoutSchema.parse(data))
+  .inputValidator((data: unknown) => approveCheckoutSchema.parse(data))
   .handler(async ({ data }) => {
     const manager = await requireManager()
 
@@ -218,7 +218,7 @@ export const approveCheckout = createServerFn({ method: 'POST' })
   })
 
 export const revokeCheckout = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         userId: z.string().uuid(),
@@ -261,7 +261,7 @@ export const revokeCheckout = createServerFn({ method: 'POST' })
 // ============ Machine Management (Admin) ============
 
 export const createMachine = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         name: z.string().min(1),
@@ -286,7 +286,7 @@ export const createMachine = createServerFn({ method: 'POST' })
   })
 
 export const updateMachine = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         machineId: z.string().uuid(),
@@ -315,7 +315,7 @@ export const updateMachine = createServerFn({ method: 'POST' })
   })
 
 export const setMachineRequirements = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         machineId: z.string().uuid(),
@@ -353,7 +353,7 @@ export const setMachineRequirements = createServerFn({ method: 'POST' })
 // ============ Training Module Management (Admin) ============
 
 export const createTrainingModule = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         title: z.string().min(1),
@@ -385,7 +385,7 @@ export const createTrainingModule = createServerFn({ method: 'POST' })
   })
 
 export const updateTrainingModule = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         moduleId: z.string().uuid(),
@@ -445,7 +445,7 @@ export const getUsers = createServerFn({ method: 'GET' }).handler(async () => {
 })
 
 export const updateUser = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         userId: z.string().uuid(),

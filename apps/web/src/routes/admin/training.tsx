@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
 import { useMemo, useState } from 'react'
 import { requireAdmin } from '~/server/auth/middleware'

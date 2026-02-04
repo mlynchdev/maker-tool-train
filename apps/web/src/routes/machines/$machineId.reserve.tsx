@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
@@ -11,7 +11,7 @@ import { AvailabilityPicker } from '~/components/AvailabilityPicker'
 import { reserveMachine } from '~/server/api/machines'
 
 const getReserveData = createServerFn({ method: 'GET' })
-  .validator((data: { machineId: string }) => data)
+  .inputValidator((data: { machineId: string }) => data)
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
@@ -53,7 +53,7 @@ const getReserveData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/machines/$machineId/reserve')({
   component: ReserveMachinePage,
   loader: async ({ params }) => {
-    return await getReserveData({ data: { machineId: params.machineId } })
+    return await getReserveData({ machineId: params.machineId })
   },
 })
 

@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq, asc } from 'drizzle-orm'
 import { useState } from 'react'
 import { requireAdmin } from '~/server/auth/middleware'
@@ -8,7 +8,7 @@ import { Header } from '~/components/Header'
 import { updateMachine, setMachineRequirements } from '~/server/api/admin'
 
 const getMachineEditData = createServerFn({ method: 'GET' })
-  .validator((data: { machineId: string }) => data)
+  .inputValidator((data: { machineId: string }) => data)
   .handler(async ({ data }) => {
     const user = await requireAdmin()
 
@@ -38,7 +38,7 @@ const getMachineEditData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/admin/machines/$machineId')({
   component: EditMachinePage,
   loader: async ({ params }) => {
-    return await getMachineEditData({ data: { machineId: params.machineId } })
+    return await getMachineEditData({ machineId: params.machineId })
   },
 })
 

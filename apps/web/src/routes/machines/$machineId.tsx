@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, machines } from '~/lib/db'
@@ -7,7 +7,7 @@ import { checkEligibility, getMachineRequirements } from '~/server/services/elig
 import { Header } from '~/components/Header'
 
 const getMachineData = createServerFn({ method: 'GET' })
-  .validator((data: { machineId: string }) => data)
+  .inputValidator((data: { machineId: string }) => data)
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
@@ -28,7 +28,7 @@ const getMachineData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/machines/$machineId')({
   component: MachineDetailPage,
   loader: async ({ params }) => {
-    return await getMachineData({ data: { machineId: params.machineId } })
+    return await getMachineData({ machineId: params.machineId })
   },
 })
 

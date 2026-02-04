@@ -1,4 +1,5 @@
 import { eq, lt } from 'drizzle-orm'
+import * as argon2 from 'argon2'
 import { db, users, sessions } from '~/lib/db'
 import type { AuthService, AuthUser, UserRole } from './types'
 import { SESSION_DURATION_MS } from './types'
@@ -74,7 +75,7 @@ export class DevAuthService implements AuthService {
       return null
     }
 
-    const isValid = await Bun.password.verify(password, user.passwordHash)
+    const isValid = await argon2.verify(user.passwordHash, password)
     if (!isValid) {
       return null
     }
@@ -92,8 +93,8 @@ export class DevAuthService implements AuthService {
   }
 
   async hashPassword(password: string): Promise<string> {
-    return Bun.password.hash(password, {
-      algorithm: 'argon2id',
+    return argon2.hash(password, {
+      type: argon2.argon2id,
       memoryCost: 19456,
       timeCost: 2,
     })
