@@ -1,0 +1,31 @@
+# Build artifacts
+.output/
+.vinxi/
+dist/
+
+# Vite/Vinxi timestamp files
+app.config.timestamp_*.js
+
+# Dependencies (handled at root level)
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Drizzle
+drizzle/meta/
+
+# Logs
+*.log
