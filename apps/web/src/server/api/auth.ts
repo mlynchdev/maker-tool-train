@@ -1,7 +1,7 @@
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { getAuthService, getAuthUser, createSessionCookie, createLogoutCookie, SESSION_DURATION_MS } from '../auth'
-import { setResponseHeader } from 'vinxi/http'
+import { setResponseHeaders } from '@tanstack/react-start/server'
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -15,45 +15,45 @@ const registerSchema = z.object({
 })
 
 export const login = createServerFn({ method: 'POST' })
-  .validator((data: unknown) => loginSchema.parse(data))
-  .handler(async ({ data }) => {
+  .handler(async (ctx) => {
+    const input = loginSchema.parse(ctx.data)
     const auth = getAuthService()
 
-    const user = await auth.verifyCredentials(data.email, data.password)
+    const user = await auth.verifyCredentials(input.email, input.password)
     if (!user) {
-      return { success: false, error: 'Invalid email or password' }
+      return { success: false as const, error: 'Invalid email or password' }
     }
 
     const token = await auth.createSession(user.id)
     const maxAge = Math.floor(SESSION_DURATION_MS / 1000)
 
-    setResponseHeader('Set-Cookie', createSessionCookie(token, maxAge))
+    setResponseHeaders({ 'Set-Cookie': createSessionCookie(token, maxAge) })
 
-    return { success: true, user }
+    return { success: true as const, user }
   })
 
 export const register = createServerFn({ method: 'POST' })
-  .validator((data: unknown) => registerSchema.parse(data))
-  .handler(async ({ data }) => {
+  .handler(async (ctx) => {
+    const input = registerSchema.parse(ctx.data)
     const auth = getAuthService()
 
     // Check if user already exists
-    const existing = await auth.getUserByEmail(data.email)
+    const existing = await auth.getUserByEmail(input.email)
     if (existing) {
-      return { success: false, error: 'Email already registered' }
+      return { success: false as const, error: 'Email already registered' }
     }
 
-    const user = await auth.createUser(data.email, data.password, data.name)
+    const user = await auth.createUser(input.email, input.password, input.name)
     const token = await auth.createSession(user.id)
     const maxAge = Math.floor(SESSION_DURATION_MS / 1000)
 
-    setResponseHeader('Set-Cookie', createSessionCookie(token, maxAge))
+    setResponseHeaders({ 'Set-Cookie': createSessionCookie(token, maxAge) })
 
-    return { success: true, user }
+    return { success: true as const, user }
   })
 
 export const logout = createServerFn({ method: 'POST' }).handler(async () => {
-  setResponseHeader('Set-Cookie', createLogoutCookie())
+  setResponseHeaders({ 'Set-Cookie': createLogoutCookie() })
   return { success: true }
 })
 

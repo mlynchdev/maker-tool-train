@@ -1,35 +1,11 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
-import { eq } from 'drizzle-orm'
-import { requireAuth } from '~/server/auth/middleware'
-import { db, machines } from '~/lib/db'
-import { checkEligibility } from '~/server/services/eligibility'
+import { getMachines } from '~/server/api/machines'
 import { Header } from '~/components/Header'
-
-const getMachinesData = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await requireAuth()
-
-  const machineList = await db.query.machines.findMany({
-    where: eq(machines.active, true),
-  })
-
-  const machinesWithEligibility = await Promise.all(
-    machineList.map(async (machine) => {
-      const eligibility = await checkEligibility(user.id, machine.id)
-      return {
-        ...machine,
-        eligibility,
-      }
-    })
-  )
-
-  return { user, machines: machinesWithEligibility }
-})
 
 export const Route = createFileRoute('/machines/')({
   component: MachinesPage,
   loader: async () => {
-    return await getMachinesData()
+    return await getMachines()
   },
 })
 

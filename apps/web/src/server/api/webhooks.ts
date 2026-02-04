@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { db, reservations } from '~/lib/db'
 import { webhookBookingSchema } from '../services/calcom'
@@ -17,7 +17,7 @@ function verifyWebhookSecret(request: Request): boolean {
 }
 
 export const handleCalcomWebhook = createServerFn({ method: 'POST' })
-  .validator((data: unknown) => webhookBookingSchema.parse(data))
+  .inputValidator((data: unknown) => webhookBookingSchema.parse(data))
   .handler(async ({ data }) => {
     const { triggerEvent, payload } = data
 

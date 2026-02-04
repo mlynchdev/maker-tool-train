@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq, and, gte, desc } from 'drizzle-orm'
 import { useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
@@ -50,7 +50,7 @@ function ReservationsPage() {
     setCancelling(reservationId)
 
     try {
-      const result = await cancelReservation({ data: { reservationId } })
+      const result = await cancelReservation({ reservationId })
 
       if (result.success) {
         setReservationsList((prev) =>

@@ -1,9 +1,10 @@
 import {
+  HeadContent,
+  Link,
   Outlet,
-  ScrollRestoration,
+  Scripts,
   createRootRoute,
 } from '@tanstack/react-router'
-import { Meta, Scripts } from '@tanstack/start'
 import type { ReactNode } from 'react'
 
 export const Route = createRootRoute({
@@ -18,6 +19,7 @@ export const Route = createRootRoute({
     ],
   }),
   component: RootComponent,
+  notFoundComponent: NotFoundComponent,
 })
 
 function RootComponent() {
@@ -28,15 +30,28 @@ function RootComponent() {
   )
 }
 
+function NotFoundComponent() {
+  return (
+    <RootDocument>
+      <div className="container" style={{ textAlign: 'center', padding: '4rem 1rem' }}>
+        <h1>404 - Page Not Found</h1>
+        <p className="text-muted">The page you're looking for doesn't exist.</p>
+        <Link to="/" className="btn btn-primary" style={{ marginTop: '1rem' }}>
+          Go Home
+        </Link>
+      </div>
+    </RootDocument>
+  )
+}
+
 function RootDocument({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
-        <Meta />
+        <HeadContent />
       </head>
       <body>
         {children}
-        <ScrollRestoration />
         <Scripts />
       </body>
     </html>

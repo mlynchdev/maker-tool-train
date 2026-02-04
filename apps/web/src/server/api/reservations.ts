@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { eq, and, gte, desc } from 'drizzle-orm'
 import { requireAuth } from '../auth'
@@ -7,7 +7,7 @@ import { calcom } from '../services/calcom'
 import { emitBookingEvent, broadcastMachineAvailabilityChange } from '../services/events'
 
 export const getReservations = createServerFn({ method: 'GET' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         includesPast: z.boolean().optional(),
@@ -36,7 +36,7 @@ export const getReservations = createServerFn({ method: 'GET' })
   })
 
 export const getReservation = createServerFn({ method: 'GET' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z.object({ reservationId: z.string().uuid() }).parse(data)
   )
   .handler(async ({ data }) => {
@@ -63,7 +63,7 @@ export const getReservation = createServerFn({ method: 'GET' })
   })
 
 export const cancelReservation = createServerFn({ method: 'POST' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         reservationId: z.string().uuid(),

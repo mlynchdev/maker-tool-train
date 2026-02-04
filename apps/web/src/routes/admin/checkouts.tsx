@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
@@ -79,7 +79,7 @@ function CheckoutsPage() {
     setApproving(key)
 
     try {
-      const result = await approveCheckout({ data: { userId, machineId } })
+      const result = await approveCheckout({ userId, machineId })
 
       if (result.success) {
         setPendingApprovals((prev) =>

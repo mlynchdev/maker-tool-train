@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
@@ -9,7 +9,7 @@ import { Header } from '~/components/Header'
 import { approveCheckout, revokeCheckout } from '~/server/api/admin'
 
 const getUserCheckoutData = createServerFn({ method: 'GET' })
-  .validator((data: { userId: string }) => data)
+  .inputValidator((data: { userId: string }) => data)
   .handler(async ({ data }) => {
     const currentUser = await requireManager()
 
@@ -62,7 +62,7 @@ const getUserCheckoutData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/admin/checkouts/$userId')({
   component: UserCheckoutPage,
   loader: async ({ params }) => {
-    return await getUserCheckoutData({ data: { userId: params.userId } })
+    return await getUserCheckoutData({ userId: params.userId })
   },
 })
 

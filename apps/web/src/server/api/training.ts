@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { requireAuth } from '../auth'
@@ -19,7 +19,7 @@ export const getModules = createServerFn({ method: 'GET' }).handler(async () => 
 })
 
 export const getModule = createServerFn({ method: 'GET' })
-  .validator((data: unknown) => z.object({ moduleId: z.string().uuid() }).parse(data))
+  .inputValidator((data: unknown) => z.object({ moduleId: z.string().uuid() }).parse(data))
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
@@ -40,7 +40,7 @@ export const getModule = createServerFn({ method: 'GET' })
   })
 
 export const updateProgress = createServerFn({ method: 'POST' })
-  .validator((data: unknown) => progressUpdateSchema.parse(data))
+  .inputValidator((data: unknown) => progressUpdateSchema.parse(data))
   .handler(async ({ data }) => {
     const user = await requireAuth()
 

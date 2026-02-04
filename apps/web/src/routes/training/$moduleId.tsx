@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
@@ -10,7 +10,7 @@ import { YouTubePlayer } from '~/components/YouTubePlayer'
 import { updateProgress } from '~/server/api/training'
 
 const getModuleData = createServerFn({ method: 'GET' })
-  .validator((data: { moduleId: string }) => data)
+  .inputValidator((data: { moduleId: string }) => data)
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
@@ -30,7 +30,7 @@ const getModuleData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/training/$moduleId')({
   component: TrainingModulePage,
   loader: async ({ params }) => {
-    return await getModuleData({ data: { moduleId: params.moduleId } })
+    return await getModuleData({ moduleId: params.moduleId })
   },
 })
 

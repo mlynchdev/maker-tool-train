@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/start'
+import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { requireAuth } from '../auth'
@@ -20,17 +20,16 @@ export const getMachines = createServerFn({ method: 'GET' }).handler(async () =>
       const eligibility = await checkEligibility(user.id, machine.id)
       return {
         ...machine,
-        eligible: eligibility.eligible,
-        eligibilityReasons: eligibility.reasons,
+        eligibility,
       }
     })
   )
 
-  return { machines: machinesWithEligibility }
+  return { user, machines: machinesWithEligibility }
 })
 
 export const getMachine = createServerFn({ method: 'GET' })
-  .validator((data: unknown) => z.object({ machineId: z.string().uuid() }).parse(data))
+  .inputValidator((data: unknown) => z.object({ machineId: z.string().uuid() }).parse(data))
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
@@ -60,7 +59,7 @@ export const getMachine = createServerFn({ method: 'GET' })
   })
 
 export const getMachineEligibility = createServerFn({ method: 'GET' })
-  .validator((data: unknown) => z.object({ machineId: z.string().uuid() }).parse(data))
+  .inputValidator((data: unknown) => z.object({ machineId: z.string().uuid() }).parse(data))
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
@@ -70,7 +69,7 @@ export const getMachineEligibility = createServerFn({ method: 'GET' })
   })
 
 export const getMachineAvailability = createServerFn({ method: 'GET' })
-  .validator((data: unknown) =>
+  .inputValidator((data: unknown) =>
     z
       .object({
         machineId: z.string().uuid(),
@@ -113,7 +112,7 @@ const reserveSchema = z.object({
 })
 
 export const reserveMachine = createServerFn({ method: 'POST' })
-  .validator((data: unknown) => reserveSchema.parse(data))
+  .inputValidator((data: unknown) => reserveSchema.parse(data))
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
