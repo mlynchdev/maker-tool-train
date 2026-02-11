@@ -39,34 +39,62 @@ function TrainingModulePage() {
   const [currentProgress, setCurrentProgress] = useState(progress?.percentComplete || 0)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
+  const pendingRef = useRef<{ watchedSeconds: number; currentPosition: number; sessionDuration: number; videoDuration: number } | null>(null)
 
-  const handleProgress = useCallback(
-    async (watchedSeconds: number, currentPosition: number, sessionDuration: number) => {
-      if (savingRef.current) return
-
+  const saveProgress = useCallback(
+    async (watchedSeconds: number, currentPosition: number, sessionDuration: number, videoDuration: number) => {
       savingRef.current = true
       setSaving(true)
+
+      // Always update the local display from client-tracked watchedSeconds
+      const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
+      const localPercent = Math.min(Math.floor((watchedSeconds / displayDuration) * 100), 100)
+      setCurrentProgress(localPercent)
+
       try {
-        await updateProgress({
+        const result = await updateProgress({
           data: {
             moduleId: module.id,
             watchedSeconds,
             currentPosition,
             sessionDuration,
+            videoDuration: videoDuration > 0 ? videoDuration : undefined,
           },
         })
 
-        // Update local progress display
-        const newPercent = Math.floor((watchedSeconds / module.durationSeconds) * 100)
-        setCurrentProgress(Math.min(newPercent, 100))
+        if (result.success && 'percentComplete' in result) {
+          // Prefer server-accepted value (may differ from local if server capped it)
+          setCurrentProgress(result.percentComplete)
+        } else if (!result.success) {
+          console.warn('Progress update rejected:', result.error)
+        }
       } catch (error) {
         console.error('Failed to save progress:', error)
       } finally {
         savingRef.current = false
         setSaving(false)
       }
+
+      // Flush any queued update (e.g. final report on video end)
+      const pending = pendingRef.current
+      if (pending) {
+        pendingRef.current = null
+        await saveProgress(pending.watchedSeconds, pending.currentPosition, pending.sessionDuration, pending.videoDuration)
+      }
     },
     [module.id, module.durationSeconds]
+  )
+
+  const handleProgress = useCallback(
+    async (watchedSeconds: number, currentPosition: number, sessionDuration: number, videoDuration: number) => {
+      if (savingRef.current) {
+        // Queue latest values — only the most recent matters
+        pendingRef.current = { watchedSeconds, currentPosition, sessionDuration, videoDuration }
+        return
+      }
+      await saveProgress(watchedSeconds, currentPosition, sessionDuration, videoDuration)
+    },
+    [saveProgress]
   )
 
   return (

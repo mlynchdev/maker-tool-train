@@ -7,6 +7,7 @@ export const progressUpdateSchema = z.object({
   watchedSeconds: z.number().int().min(0),
   currentPosition: z.number().int().min(0),
   sessionDuration: z.number().int().min(0),
+  videoDuration: z.number().int().min(0).optional(),
 })
 
 export type ProgressUpdate = z.infer<typeof progressUpdateSchema>
@@ -63,7 +64,7 @@ export function validateProgressUpdate(
 export async function updateTrainingProgress(
   userId: string,
   update: ProgressUpdate
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; watchedSeconds?: number; percentComplete?: number }> {
   // Get module info
   const module = await db.query.trainingModules.findFirst({
     where: eq(trainingModules.id, update.moduleId),
@@ -75,6 +76,16 @@ export async function updateTrainingProgress(
 
   if (!module.active) {
     return { success: false, error: 'Module is not active' }
+  }
+
+  // Auto-correct module duration from the actual YouTube video duration
+  let effectiveDuration = module.durationSeconds
+  if (update.videoDuration && update.videoDuration > 0 && update.videoDuration !== module.durationSeconds) {
+    effectiveDuration = update.videoDuration
+    await db
+      .update(trainingModules)
+      .set({ durationSeconds: update.videoDuration })
+      .where(eq(trainingModules.id, update.moduleId))
   }
 
   // Get existing progress
@@ -91,15 +102,21 @@ export async function updateTrainingProgress(
   const validation = validateProgressUpdate(
     existingWatchedSeconds,
     update,
-    module.durationSeconds
+    effectiveDuration
   )
 
   if (!validation.valid) {
     return { success: false, error: validation.reason }
   }
 
+  // Cap watched seconds at the effective duration (fixes inflated values from old bugs)
+  const savedWatchedSeconds = Math.min(
+    Math.max(existingWatchedSeconds, update.watchedSeconds),
+    effectiveDuration
+  )
+
   // Calculate if completed (90% threshold)
-  const watchPercent = (update.watchedSeconds / module.durationSeconds) * 100
+  const watchPercent = (savedWatchedSeconds / effectiveDuration) * 100
   const isCompleted = watchPercent >= 90
   const completedAt = isCompleted && !existing?.completedAt ? new Date() : existing?.completedAt
 
@@ -108,7 +125,7 @@ export async function updateTrainingProgress(
     await db
       .update(trainingProgress)
       .set({
-        watchedSeconds: Math.max(existingWatchedSeconds, update.watchedSeconds),
+        watchedSeconds: savedWatchedSeconds,
         lastPosition: update.currentPosition,
         completedAt,
         updatedAt: new Date(),
@@ -119,13 +136,17 @@ export async function updateTrainingProgress(
     await db.insert(trainingProgress).values({
       userId,
       moduleId: update.moduleId,
-      watchedSeconds: update.watchedSeconds,
+      watchedSeconds: savedWatchedSeconds,
       lastPosition: update.currentPosition,
       completedAt,
     })
   }
 
-  return { success: true }
+  const percentComplete = effectiveDuration > 0
+    ? Math.min(Math.floor((savedWatchedSeconds / effectiveDuration) * 100), 100)
+    : 0
+
+  return { success: true, watchedSeconds: savedWatchedSeconds, percentComplete }
 }
 
 export async function getModuleProgress(userId: string, moduleId: string) {

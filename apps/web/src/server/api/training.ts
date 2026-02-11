@@ -47,10 +47,10 @@ export const updateProgress = createServerFn({ method: 'POST' })
     const result = await updateTrainingProgress(user.id, data)
 
     if (!result.success) {
-      return { success: false, error: result.error }
+      return { success: false as const, error: result.error }
     }
 
-    return { success: true }
+    return { success: true as const, watchedSeconds: result.watchedSeconds!, percentComplete: result.percentComplete! }
   })
 
 export const getTrainingStatus = createServerFn({ method: 'GET' }).handler(

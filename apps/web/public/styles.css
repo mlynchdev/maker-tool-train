@@ -361,6 +361,17 @@ a:hover {
   height: 100%;
 }
 
+.speed-warning {
+  background: #f59e0b;
+  color: #1a1a1a;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  text-align: center;
+}
+
 /* Calendar / Availability */
 .availability-grid {
   display: grid;

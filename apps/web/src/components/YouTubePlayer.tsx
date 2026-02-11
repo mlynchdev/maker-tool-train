@@ -8,9 +8,17 @@ declare global {
   }
 }
 
+const MAX_PLAYBACK_RATE = 1.5
+const REPORT_INTERVAL_SECONDS = 5
+
+// YouTube Player States
+const ENDED = 0
+const PLAYING = 1
+const PAUSED = 2
+
 interface YouTubePlayerProps {
   videoId: string
-  onProgress: (watchedSeconds: number, currentPosition: number, sessionDuration: number) => void
+  onProgress: (watchedSeconds: number, currentPosition: number, sessionDuration: number, videoDuration: number) => void
   initialPosition?: number
   initialWatchedSeconds?: number
 }
@@ -19,39 +27,87 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YT.Player | null>(null)
   const [isReady, setIsReady] = useState(false)
-  const lastUpdateRef = useRef<number>(Date.now())
-  const lastTimeRef = useRef<number>(initialPosition)
-  const watchedSecondsRef = useRef<number>(initialWatchedSeconds)
+  const [speedWarning, setSpeedWarning] = useState(false)
+
+  // Progress tracking refs
+  const watchedSecondsRef = useRef(initialWatchedSeconds)
+  const lastPositionRef = useRef(initialPosition)
+  const lastTickWallRef = useRef(0) // wall-clock ms of last tick; 0 = not actively tracking
+  const lastReportWallRef = useRef(Date.now())
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onProgressRef = useRef(onProgress)
   onProgressRef.current = onProgress
 
-  const trackProgress = useCallback(() => {
-    if (!playerRef.current) return
-
+  // Accumulate watched time from the last tick to now
+  const accumulate = useCallback(() => {
     const player = playerRef.current
-    const state = player.getPlayerState()
+    if (!player || lastTickWallRef.current === 0) return
 
-    // Only track when playing (state === 1)
-    if (state === 1) {
-      const currentTime = Math.floor(player.getCurrentTime())
-      const now = Date.now()
-      const sessionDuration = Math.floor((now - lastUpdateRef.current) / 1000)
+    const now = Date.now()
+    const currentTime = player.getCurrentTime()
+    const wallElapsed = (now - lastTickWallRef.current) / 1000
+    const rate = player.getPlaybackRate()
+    const expectedDelta = wallElapsed * rate
 
-      // Accumulate only forward, continuous playback (not seeks)
-      const delta = currentTime - lastTimeRef.current
-      if (delta > 0 && delta <= 2) {
-        watchedSecondsRef.current += delta
-      }
-      lastTimeRef.current = currentTime
+    const videoDelta = currentTime - lastPositionRef.current
 
-      // Report progress every 5 seconds
-      if (sessionDuration >= 5) {
-        onProgressRef.current(watchedSecondsRef.current, currentTime, sessionDuration)
-        lastUpdateRef.current = now
-      }
+    // Only credit forward, continuous playback (rejects seeks and backwards jumps)
+    if (videoDelta > 0 && videoDelta <= expectedDelta + 2) {
+      const duration = player.getDuration() || 0
+      watchedSecondsRef.current = Math.min(
+        watchedSecondsRef.current + videoDelta,
+        duration > 0 ? duration : watchedSecondsRef.current + videoDelta
+      )
+    }
+
+    lastPositionRef.current = currentTime
+    lastTickWallRef.current = now
+  }, [])
+
+  // Send current progress to the parent
+  const report = useCallback(() => {
+    const now = Date.now()
+    const sessionDuration = Math.floor((now - lastReportWallRef.current) / 1000)
+    lastReportWallRef.current = now
+
+    const videoDuration = Math.floor(playerRef.current?.getDuration() || 0)
+
+    onProgressRef.current(
+      Math.floor(watchedSecondsRef.current),
+      Math.floor(lastPositionRef.current),
+      sessionDuration,
+      videoDuration
+    )
+  }, [])
+
+  // Interval tick: accumulate time, then report if enough time has passed
+  const tick = useCallback(() => {
+    const player = playerRef.current
+    if (!player || player.getPlayerState() !== PLAYING) return
+
+    accumulate()
+
+    const sinceLastReport = (Date.now() - lastReportWallRef.current) / 1000
+    if (sinceLastReport >= REPORT_INTERVAL_SECONDS) {
+      report()
+    }
+  }, [accumulate, report])
+
+  const handlePlaybackRateChange = useCallback((event: YT.OnPlaybackRateChangeEvent) => {
+    if (event.data > MAX_PLAYBACK_RATE) {
+      playerRef.current?.setPlaybackRate(MAX_PLAYBACK_RATE)
+      setSpeedWarning(true)
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current)
+      warningTimerRef.current = setTimeout(() => setSpeedWarning(false), 4000)
     }
   }, [])
+
+  // Use refs for callbacks used in player events to avoid re-initializing the player
+  const accumulateRef = useRef(accumulate)
+  accumulateRef.current = accumulate
+  const reportRef = useRef(report)
+  reportRef.current = report
 
   useEffect(() => {
     let mounted = true
@@ -77,20 +133,24 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
         events: {
           onReady: () => {
             setIsReady(true)
-            lastUpdateRef.current = Date.now()
           },
-          onStateChange: (event) => {
-            // When video ends, send final progress
-            if (event.data === 0) {
-              const player = playerRef.current
-              if (player) {
-                const duration = Math.floor(player.getDuration())
-                const now = Date.now()
-                const sessionDuration = Math.floor((now - lastUpdateRef.current) / 1000)
-                onProgressRef.current(duration, duration, sessionDuration)
+          onStateChange: (event: YT.OnStateChangeEvent) => {
+            const state = event.data
+
+            if (state === PLAYING) {
+              // Starting or resuming: reset wall-clock baseline so first tick is accurate
+              lastTickWallRef.current = Date.now()
+              lastPositionRef.current = playerRef.current?.getCurrentTime() || 0
+            } else if (state === PAUSED || state === ENDED) {
+              // Flush any accumulated time since last tick, then report immediately
+              if (lastTickWallRef.current > 0) {
+                accumulateRef.current()
+                reportRef.current()
               }
+              lastTickWallRef.current = 0 // stop accumulating until next play
             }
           },
+          onPlaybackRateChange: handlePlaybackRateChange,
         },
       })
     }
@@ -99,17 +159,18 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
 
     return () => {
       mounted = false
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current)
       if (playerRef.current) {
         playerRef.current.destroy()
         playerRef.current = null
       }
     }
-  }, [videoId, initialPosition])
+  }, [videoId, initialPosition, handlePlaybackRateChange])
 
   // Set up progress tracking interval
   useEffect(() => {
     if (isReady) {
-      intervalRef.current = setInterval(trackProgress, 1000)
+      intervalRef.current = setInterval(tick, 1000)
     }
 
     return () => {
@@ -117,11 +178,30 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
         clearInterval(intervalRef.current)
       }
     }
-  }, [isReady, trackProgress])
+  }, [isReady, tick])
+
+  // Pause video when window loses focus
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && playerRef.current?.getPlayerState() === PLAYING) {
+        playerRef.current.pauseVideo()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
 
   return (
-    <div className="video-container">
-      <div ref={containerRef} />
+    <div>
+      {speedWarning && (
+        <div className="speed-warning">
+          Maximum playback speed is 1.5x. Speed has been adjusted.
+        </div>
+      )}
+      <div className="video-container">
+        <div ref={containerRef} />
+      </div>
     </div>
   )
 }
