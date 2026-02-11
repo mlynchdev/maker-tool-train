@@ -79,7 +79,7 @@ function CheckoutsPage() {
     setApproving(key)
 
     try {
-      const result = await approveCheckout({ userId, machineId })
+      const result = await approveCheckout({ data: { userId, machineId } })
 
       if (result.success) {
         setPendingApprovals((prev) =>

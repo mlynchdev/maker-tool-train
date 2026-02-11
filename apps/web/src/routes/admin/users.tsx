@@ -33,7 +33,7 @@ function AdminUsersPage() {
     setUpdating(userId)
 
     try {
-      const result = await updateUser({ userId, role })
+      const result = await updateUser({ data: { userId, role } })
 
       if (result.success) {
         setUserList((prev) =>
@@ -51,7 +51,7 @@ function AdminUsersPage() {
     setUpdating(userId)
 
     try {
-      const result = await updateUser({ userId, status })
+      const result = await updateUser({ data: { userId, status } })
 
       if (result.success) {
         setUserList((prev) =>

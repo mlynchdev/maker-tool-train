@@ -32,7 +32,7 @@ function RegisterPage() {
     setLoading(true)
 
     try {
-      const result = await register({ email, password, name: name || undefined })
+      const result = await register({ data: { email, password, name: name || undefined } })
 
       if (result.success) {
         navigate({ to: '/' })
