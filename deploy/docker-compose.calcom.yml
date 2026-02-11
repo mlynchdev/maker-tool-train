@@ -1,0 +1,71 @@
+# Cal.com stack for Hetzner VPS (native x86)
+# Deploy with: docker compose -f docker-compose.calcom.yml up -d
+#
+# Cal.com web/API will be available on port 5555.
+# Postgres is on localhost:5434 (SSH tunnel for setup script).
+
+services:
+  calcom-postgres:
+    image: postgres:16-alpine
+    container_name: calcom-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=calcom
+      - POSTGRES_PASSWORD=calcom_dev_password
+      - POSTGRES_DB=calendso
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - calcom-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calcom"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: calcom-redis
+    restart: unless-stopped
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  calcom:
+    image: calcom/cal.com:latest
+    container_name: calcom
+    restart: unless-stopped
+    depends_on:
+      calcom-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "5555:3000"
+    command: >
+      sh -c "
+        scripts/replace-placeholder.sh $$BUILT_NEXT_PUBLIC_WEBAPP_URL $$NEXT_PUBLIC_WEBAPP_URL &&
+        sed -i 's|http://localhost:3000/api/v2/|/api/v2/|g' apps/web/.next/routes-manifest.json &&
+        scripts/wait-for-it.sh calcom-postgres:5432 -- echo 'database is up' &&
+        npx prisma migrate deploy --schema /calcom/packages/prisma/schema.prisma &&
+        npx ts-node --transpile-only /calcom/scripts/seed-app-store.ts &&
+        yarn start
+      "
+    environment:
+      DATABASE_URL: postgresql://calcom:calcom_dev_password@calcom-postgres:5432/calendso
+      DATABASE_DIRECT_URL: postgresql://calcom:calcom_dev_password@calcom-postgres:5432/calendso
+      NEXTAUTH_SECRET: calcom-dev-nextauth-secret-32chars!
+      CALENDSO_ENCRYPTION_KEY: calcom-dev-encryption-key-32char!
+      NEXTAUTH_URL: http://localhost:5555
+      NEXT_PUBLIC_WEBAPP_URL: http://localhost:5555
+      NEXT_PUBLIC_API_V2_URL: http://localhost:5555/api/v2
+      CALCOM_LICENSE_KEY: ""
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+
+volumes:
+  calcom-pgdata:

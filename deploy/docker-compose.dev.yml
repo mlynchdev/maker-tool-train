@@ -1,5 +1,7 @@
-# Development compose file - runs only the database
-# Use with: docker-compose -f docker-compose.dev.yml up -d
+# Development compose file - runs the app's database for local dev
+# Cal.com runs on a separate VPS — see docs/calcom-dev-setup.md
+#
+# Usage: docker compose -f docker-compose.dev.yml up -d
 
 services:
   postgres:
@@ -20,22 +22,5 @@ services:
       timeout: 5s
       retries: 5
 
-  # Optional: Cal.com for local development
-  # Uncomment if you need to test Cal.com integration locally
-
-  # calcom-postgres:
-  #   image: postgres:16-alpine
-  #   container_name: training-dev-calcom-postgres
-  #   restart: unless-stopped
-  #   environment:
-  #     - POSTGRES_USER=calcom
-  #     - POSTGRES_PASSWORD=calcom_dev_password
-  #     - POSTGRES_DB=calcom
-  #   ports:
-  #     - "5433:5432"
-  #   volumes:
-  #     - dev-calcom-pgdata:/var/lib/postgresql/data
-
 volumes:
   dev-pgdata:
-  # dev-calcom-pgdata:

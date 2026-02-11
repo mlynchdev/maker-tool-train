@@ -1,47 +1,12 @@
 import { z } from 'zod'
 
 const CALCOM_API_URL = process.env.CALCOM_API_URL || 'http://localhost:5555'
-const CALCOM_API_KEY = process.env.CALCOM_API_KEY || ''
-
-interface CalcomError {
-  message: string
-  code?: string
-}
 
 class CalcomClient {
   private baseUrl: string
-  private apiKey: string
 
-  constructor(baseUrl: string, apiKey: string) {
+  constructor(baseUrl: string) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
-    this.apiKey = apiKey
-  }
-
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<T> {
-    const url = `${this.baseUrl}${path}`
-
-    const response = await fetch(url, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-        'cal-api-version': '2024-08-13',
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    })
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        message: `HTTP ${response.status}`,
-      }))
-      throw new Error(error.message || `Cal.com API error: ${response.status}`)
-    }
-
-    return response.json()
   }
 
   async getAvailability(
@@ -49,20 +14,32 @@ class CalcomClient {
     startDate: Date,
     endDate: Date
   ): Promise<AvailabilitySlot[]> {
-    const params = new URLSearchParams({
-      eventTypeId: eventTypeId.toString(),
-      startTime: startDate.toISOString(),
-      endTime: endDate.toISOString(),
+    const input = JSON.stringify({
+      json: {
+        eventTypeId,
+        startTime: startDate.toISOString(),
+        endTime: endDate.toISOString(),
+        timeZone: 'America/New_York',
+        isTeamEvent: false,
+      },
     })
 
-    const response = await this.request<{ data: { slots: Record<string, AvailabilitySlot[]> } }>(
-      'GET',
-      `/v2/slots/available?${params}`
-    )
+    const url = `${this.baseUrl}/api/trpc/slots/getSchedule?input=${encodeURIComponent(input)}`
+    console.log(`[CalcomClient] GET slots/getSchedule eventTypeId=${eventTypeId}`)
 
-    // Flatten the slots from the date-keyed object
+    const response = await fetch(url)
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      throw new Error(`Cal.com tRPC error ${response.status}: ${text}`)
+    }
+
+    const data = (await response.json()) as {
+      result: { data: { json: { slots: Record<string, { time: string }[]> } } }
+    }
+
+    // Flatten the date-keyed slots object
     const allSlots: AvailabilitySlot[] = []
-    for (const dateSlots of Object.values(response.data.slots)) {
+    for (const dateSlots of Object.values(data.result.data.json.slots)) {
       allSlots.push(...dateSlots)
     }
 
@@ -70,75 +47,87 @@ class CalcomClient {
   }
 
   async createBooking(params: CreateBookingParams): Promise<CalcomBooking> {
-    const response = await this.request<{ data: CalcomBooking }>(
-      'POST',
-      '/v2/bookings',
-      {
-        eventTypeId: params.eventTypeId,
-        start: params.start.toISOString(),
-        attendee: {
-          name: params.attendee.name,
-          email: params.attendee.email,
-          timeZone: params.attendee.timeZone || 'UTC',
-        },
-        metadata: params.metadata,
-      }
-    )
+    const url = `${this.baseUrl}/api/book/event`
+    console.log(`[CalcomClient] POST book/event eventTypeId=${params.eventTypeId}`)
 
-    return response.data
+    // Calculate end time from event type length (60 min default)
+    const startTime = params.start
+    const endTime = new Date(startTime.getTime() + 60 * 60 * 1000)
+
+    const body = {
+      start: startTime.toISOString(),
+      end: endTime.toISOString(),
+      eventTypeId: params.eventTypeId,
+      timeZone: params.attendee.timeZone || 'America/New_York',
+      language: 'en',
+      responses: {
+        name: params.attendee.name,
+        email: params.attendee.email,
+      },
+      metadata: params.metadata || {},
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        message: `HTTP ${response.status}`,
+      }))
+      throw new Error(error.message || `Cal.com booking error: ${response.status}`)
+    }
+
+    const data = await response.json()
+
+    return {
+      id: data.id || data.bookingId,
+      uid: data.uid,
+      title: data.title || '',
+      startTime: data.startTime || startTime.toISOString(),
+      endTime: data.endTime || endTime.toISOString(),
+      status: data.status || 'ACCEPTED',
+      attendees: data.attendees || [
+        {
+          email: params.attendee.email,
+          name: params.attendee.name,
+          timeZone: params.attendee.timeZone || 'America/New_York',
+        },
+      ],
+      metadata: data.metadata,
+    }
   }
 
   async cancelBooking(bookingUid: string, reason?: string): Promise<void> {
-    await this.request('POST', `/v2/bookings/${bookingUid}/cancel`, {
-      cancellationReason: reason,
+    // The /api/cancel endpoint requires a CSRF token
+    console.log(`[CalcomClient] Cancelling booking uid=${bookingUid}`)
+
+    // 1. Get CSRF token
+    const csrfResponse = await fetch(`${this.baseUrl}/api/auth/csrf`)
+    if (!csrfResponse.ok) {
+      throw new Error(`Failed to get CSRF token: ${csrfResponse.status}`)
+    }
+    const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string }
+
+    // 2. Cancel with CSRF token
+    const response = await fetch(`${this.baseUrl}/api/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: bookingUid,
+        csrfToken,
+        cancellationReason: reason,
+      }),
     })
-  }
 
-  async rescheduleBooking(
-    bookingUid: string,
-    newStart: Date
-  ): Promise<CalcomBooking> {
-    const response = await this.request<{ data: CalcomBooking }>(
-      'POST',
-      `/v2/bookings/${bookingUid}/reschedule`,
-      {
-        start: newStart.toISOString(),
-      }
-    )
-
-    return response.data
-  }
-
-  async getBooking(bookingUid: string): Promise<CalcomBooking | null> {
-    try {
-      const response = await this.request<{ data: CalcomBooking }>(
-        'GET',
-        `/v2/bookings/${bookingUid}`
-      )
-      return response.data
-    } catch {
-      return null
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        message: `HTTP ${response.status}`,
+      }))
+      throw new Error(error.message || `Cal.com cancel error: ${response.status}`)
     }
-  }
-
-  async listBookings(params?: ListBookingsParams): Promise<CalcomBooking[]> {
-    const searchParams = new URLSearchParams()
-
-    if (params?.attendeeEmail) {
-      searchParams.set('attendeeEmail', params.attendeeEmail)
-    }
-    if (params?.status) {
-      searchParams.set('status', params.status)
-    }
-    if (params?.eventTypeId) {
-      searchParams.set('eventTypeId', params.eventTypeId.toString())
-    }
-
-    const query = searchParams.toString()
-    const path = query ? `/v2/bookings?${query}` : '/v2/bookings'
-
-    const response = await this.request<{ data: CalcomBooking[] }>('GET', path)
-    return response.data
   }
 }
 
@@ -214,10 +203,7 @@ let calcomClient: CalcomClient | null = null
 
 export function getCalcomClient(): CalcomClient {
   if (!calcomClient) {
-    if (!CALCOM_API_KEY) {
-      throw new Error('CALCOM_API_KEY environment variable is required')
-    }
-    calcomClient = new CalcomClient(CALCOM_API_URL, CALCOM_API_KEY)
+    calcomClient = new CalcomClient(CALCOM_API_URL)
   }
   return calcomClient
 }
@@ -232,13 +218,4 @@ export const calcom = {
 
   cancelBooking: (bookingUid: string, reason?: string) =>
     getCalcomClient().cancelBooking(bookingUid, reason),
-
-  rescheduleBooking: (bookingUid: string, newStart: Date) =>
-    getCalcomClient().rescheduleBooking(bookingUid, newStart),
-
-  getBooking: (bookingUid: string) =>
-    getCalcomClient().getBooking(bookingUid),
-
-  listBookings: (params?: ListBookingsParams) =>
-    getCalcomClient().listBookings(params),
 }
