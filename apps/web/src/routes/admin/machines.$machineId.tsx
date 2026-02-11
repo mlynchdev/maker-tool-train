@@ -38,7 +38,7 @@ const getMachineEditData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/admin/machines/$machineId')({
   component: EditMachinePage,
   loader: async ({ params }) => {
-    return await getMachineEditData({ machineId: params.machineId })
+    return await getMachineEditData({ data: { machineId: params.machineId } })
   },
 })
 

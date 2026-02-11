@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
 import { getModuleProgress, updateTrainingProgress } from '~/server/services/training'
@@ -30,7 +30,7 @@ const getModuleData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/training/$moduleId')({
   component: TrainingModulePage,
   loader: async ({ params }) => {
-    return await getModuleData({ moduleId: params.moduleId })
+    return await getModuleData({ data: { moduleId: params.moduleId } })
   },
 })
 
@@ -38,11 +38,13 @@ function TrainingModulePage() {
   const { user, module, progress } = Route.useLoaderData()
   const [currentProgress, setCurrentProgress] = useState(progress?.percentComplete || 0)
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
 
   const handleProgress = useCallback(
     async (watchedSeconds: number, currentPosition: number, sessionDuration: number) => {
-      if (saving) return
+      if (savingRef.current) return
 
+      savingRef.current = true
       setSaving(true)
       try {
         await updateProgress({
@@ -60,10 +62,11 @@ function TrainingModulePage() {
       } catch (error) {
         console.error('Failed to save progress:', error)
       } finally {
+        savingRef.current = false
         setSaving(false)
       }
     },
-    [module.id, module.durationSeconds, saving]
+    [module.id, module.durationSeconds]
   )
 
   return (
@@ -96,6 +99,7 @@ function TrainingModulePage() {
               videoId={module.youtubeVideoId}
               onProgress={handleProgress}
               initialPosition={progress?.lastPosition || 0}
+              initialWatchedSeconds={progress?.watchedSeconds || 0}
             />
 
             <div className="flex flex-between flex-center mb-1">

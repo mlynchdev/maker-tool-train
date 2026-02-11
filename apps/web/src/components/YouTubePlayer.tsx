@@ -12,15 +12,19 @@ interface YouTubePlayerProps {
   videoId: string
   onProgress: (watchedSeconds: number, currentPosition: number, sessionDuration: number) => void
   initialPosition?: number
+  initialWatchedSeconds?: number
 }
 
-export function YouTubePlayer({ videoId, onProgress, initialPosition = 0 }: YouTubePlayerProps) {
+export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initialWatchedSeconds = 0 }: YouTubePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YT.Player | null>(null)
   const [isReady, setIsReady] = useState(false)
   const lastUpdateRef = useRef<number>(Date.now())
-  const watchedSecondsRef = useRef<number>(0)
+  const lastTimeRef = useRef<number>(initialPosition)
+  const watchedSecondsRef = useRef<number>(initialWatchedSeconds)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const onProgressRef = useRef(onProgress)
+  onProgressRef.current = onProgress
 
   const trackProgress = useCallback(() => {
     if (!playerRef.current) return
@@ -34,18 +38,20 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0 }: YouT
       const now = Date.now()
       const sessionDuration = Math.floor((now - lastUpdateRef.current) / 1000)
 
-      // Update watched seconds (only count forward progress)
-      if (currentTime > watchedSecondsRef.current) {
-        watchedSecondsRef.current = currentTime
+      // Accumulate only forward, continuous playback (not seeks)
+      const delta = currentTime - lastTimeRef.current
+      if (delta > 0 && delta <= 2) {
+        watchedSecondsRef.current += delta
       }
+      lastTimeRef.current = currentTime
 
       // Report progress every 5 seconds
       if (sessionDuration >= 5) {
-        onProgress(watchedSecondsRef.current, currentTime, sessionDuration)
+        onProgressRef.current(watchedSecondsRef.current, currentTime, sessionDuration)
         lastUpdateRef.current = now
       }
     }
-  }, [onProgress])
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -81,7 +87,7 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0 }: YouT
                 const duration = Math.floor(player.getDuration())
                 const now = Date.now()
                 const sessionDuration = Math.floor((now - lastUpdateRef.current) / 1000)
-                onProgress(duration, duration, sessionDuration)
+                onProgressRef.current(duration, duration, sessionDuration)
               }
             }
           },
@@ -98,7 +104,7 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0 }: YouT
         playerRef.current = null
       }
     }
-  }, [videoId, initialPosition, onProgress])
+  }, [videoId, initialPosition])
 
   // Set up progress tracking interval
   useEffect(() => {

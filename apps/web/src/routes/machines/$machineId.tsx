@@ -28,7 +28,7 @@ const getMachineData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/machines/$machineId')({
   component: MachineDetailPage,
   loader: async ({ params }) => {
-    return await getMachineData({ machineId: params.machineId })
+    return await getMachineData({ data: { machineId: params.machineId } })
   },
 })
 
