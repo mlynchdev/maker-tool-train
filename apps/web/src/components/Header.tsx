@@ -1,6 +1,8 @@
 import { Link, useNavigate } from '@tanstack/react-router'
+import { useState, useEffect } from 'react'
 import type { AuthUser } from '~/server/auth/types'
 import { logout } from '~/server/api/auth'
+import { getPendingCheckoutCount } from '~/server/api/admin'
 
 interface HeaderProps {
   user: AuthUser
@@ -8,6 +10,13 @@ interface HeaderProps {
 
 export function Header({ user }: HeaderProps) {
   const navigate = useNavigate()
+  const [pendingCount, setPendingCount] = useState(0)
+
+  useEffect(() => {
+    if (user.role === 'manager' || user.role === 'admin') {
+      getPendingCheckoutCount().then((r) => setPendingCount(r.count))
+    }
+  }, [user.role])
 
   const handleLogout = async () => {
     await logout()
@@ -27,7 +36,14 @@ export function Header({ user }: HeaderProps) {
           <Link to="/reservations">Reservations</Link>
 
           {(user.role === 'manager' || user.role === 'admin') && (
-            <Link to="/admin/checkouts">Checkouts</Link>
+            <Link to="/admin/checkouts" style={{ position: 'relative' }}>
+              Checkouts
+              {pendingCount > 0 && (
+                <span className="badge badge-warning" style={{ marginLeft: '0.35rem' }}>
+                  {pendingCount}
+                </span>
+              )}
+            </Link>
           )}
 
           <span className="text-muted text-small">{user.email}</span>

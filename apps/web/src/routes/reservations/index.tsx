@@ -50,7 +50,7 @@ function ReservationsPage() {
     setCancelling(reservationId)
 
     try {
-      const result = await cancelReservation({ reservationId })
+      const result = await cancelReservation({ data: { reservationId } })
 
       if (result.success) {
         setReservationsList((prev) =>

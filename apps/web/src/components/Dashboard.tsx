@@ -1,12 +1,22 @@
 import { Link } from '@tanstack/react-router'
+import { useState, useEffect } from 'react'
 import type { AuthUser } from '~/server/auth/types'
 import { Header } from './Header'
+import { getPendingCheckoutCount } from '~/server/api/admin'
 
 interface DashboardProps {
   user: AuthUser
 }
 
 export function Dashboard({ user }: DashboardProps) {
+  const [pendingCount, setPendingCount] = useState(0)
+
+  useEffect(() => {
+    if (user.role === 'manager' || user.role === 'admin') {
+      getPendingCheckoutCount().then((r) => setPendingCount(r.count))
+    }
+  }, [user.role])
+
   return (
     <div>
       <Header user={user} />
@@ -50,7 +60,14 @@ export function Dashboard({ user }: DashboardProps) {
               <div className="grid grid-3">
                 <Link to="/admin/checkouts" className="card" style={{ textDecoration: 'none', color: 'inherit' }}>
                   <div className="card-header">
-                    <h3 className="card-title">Checkouts</h3>
+                    <h3 className="card-title">
+                      Checkouts
+                      {pendingCount > 0 && (
+                        <span className="badge badge-warning" style={{ marginLeft: '0.5rem' }}>
+                          {pendingCount} pending
+                        </span>
+                      )}
+                    </h3>
                     <span className="badge badge-info">Manager</span>
                   </div>
                   <p className="text-muted text-small">

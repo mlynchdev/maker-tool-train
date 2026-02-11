@@ -17,6 +17,44 @@ import { emitCheckoutEvent } from '../services/events'
 
 // ============ Checkout Management (Manager+) ============
 
+export const getPendingCheckoutCount = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    await requireManager()
+
+    const allUsers = await db.query.users.findMany({
+      where: and(eq(users.status, 'active'), eq(users.role, 'member')),
+      with: {
+        trainingProgress: true,
+        managerCheckouts: true,
+      },
+    })
+
+    const allMachines = await db.query.machines.findMany({
+      where: eq(machines.active, true),
+      with: {
+        requirements: true,
+      },
+    })
+
+    let count = 0
+    for (const user of allUsers) {
+      for (const machine of allMachines) {
+        const hasCheckout = user.managerCheckouts.some(
+          (c) => c.machineId === machine.id
+        )
+        if (hasCheckout) continue
+
+        const eligibility = await checkEligibility(user.id, machine.id)
+        if (eligibility.requirements.every((r) => r.completed)) {
+          count++
+        }
+      }
+    }
+
+    return { count }
+  }
+)
+
 export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
   async () => {
     await requireManager()
