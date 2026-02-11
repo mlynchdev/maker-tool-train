@@ -62,7 +62,7 @@ const getUserCheckoutData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/admin/checkouts/$userId')({
   component: UserCheckoutPage,
   loader: async ({ params }) => {
-    return await getUserCheckoutData({ userId: params.userId })
+    return await getUserCheckoutData({ data: { userId: params.userId } })
   },
 })
 

@@ -53,7 +53,7 @@ const getReserveData = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/machines/$machineId/reserve')({
   component: ReserveMachinePage,
   loader: async ({ params }) => {
-    return await getReserveData({ machineId: params.machineId })
+    return await getReserveData({ data: { machineId: params.machineId } })
   },
 })
 
