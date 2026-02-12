@@ -28,10 +28,11 @@ USER bun
 COPY --from=builder --chown=bun:bun /app/dist ./dist
 COPY --from=builder --chown=bun:bun /app/node_modules ./node_modules
 COPY --from=builder --chown=bun:bun /app/package.json ./package.json
+COPY --from=builder --chown=bun:bun /app/server-entry.mjs ./server-entry.mjs
 COPY --from=builder --chown=bun:bun /app/drizzle ./drizzle
 COPY --from=builder --chown=bun:bun /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder --chown=bun:bun /app/tsconfig.json ./tsconfig.json
 
 EXPOSE 3000
 
-CMD ["bun", "dist/server/server.js"]
+CMD ["bun", "server-entry.mjs"]
