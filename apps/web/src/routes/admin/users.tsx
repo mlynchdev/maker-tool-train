@@ -82,75 +82,78 @@ function AdminUsersPage() {
           <h1 className="mb-3">User Management</h1>
 
           <div className="card">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>User</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Joined</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {userList.map((user) => {
-                  const isSelf = user.id === currentUser.id
-                  return (
-                    <tr key={user.id}>
-                      <td>
-                        <div>{user.name || 'No name'}</div>
-                        <div className="text-small text-muted">{user.email}</div>
-                      </td>
-                      <td>
-                        <select
-                          className="form-input"
-                          value={user.role}
-                          onChange={(e) =>
-                            handleRoleChange(
-                              user.id,
-                              e.target.value as 'member' | 'manager' | 'admin'
-                            )
-                          }
-                          disabled={isSelf || updating === user.id}
-                          style={{ width: 'auto' }}
-                        >
-                          <option value="member">Member</option>
-                          <option value="manager">Manager</option>
-                          <option value="admin">Admin</option>
-                        </select>
-                      </td>
-                      <td>
-                        <span
-                          className={`badge ${user.status === 'active' ? 'badge-success' : 'badge-danger'}`}
-                        >
-                          {user.status}
-                        </span>
-                      </td>
-                      <td className="text-small">{formatDate(user.createdAt)}</td>
-                      <td>
-                        {!isSelf && (
-                          <button
-                            className={`btn ${user.status === 'active' ? 'btn-danger' : 'btn-success'}`}
-                            onClick={() =>
-                              handleStatusChange(
+            <div className="table-wrapper">
+              <table className="table table-mobile-cards">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Joined</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {userList.map((user) => {
+                    const isSelf = user.id === currentUser.id
+                    return (
+                      <tr key={user.id}>
+                        <td data-label="User">
+                          <div>{user.name || 'No name'}</div>
+                          <div className="text-small text-muted">{user.email}</div>
+                        </td>
+                        <td data-label="Role">
+                          <select
+                            className="form-input table-inline-input"
+                            value={user.role}
+                            onChange={(e) =>
+                              handleRoleChange(
                                 user.id,
-                                user.status === 'active' ? 'suspended' : 'active'
+                                e.target.value as 'member' | 'manager' | 'admin'
                               )
                             }
-                            disabled={updating === user.id}
+                            disabled={isSelf || updating === user.id}
                           >
-                            {user.status === 'active' ? 'Suspend' : 'Activate'}
-                          </button>
-                        )}
-                        {isSelf && (
-                          <span className="text-small text-muted">Current user</span>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                            <option value="member">Member</option>
+                            <option value="manager">Manager</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </td>
+                        <td data-label="Status">
+                          <span
+                            className={`badge ${user.status === 'active' ? 'badge-success' : 'badge-danger'}`}
+                          >
+                            {user.status}
+                          </span>
+                        </td>
+                        <td className="text-small" data-label="Joined">
+                          {formatDate(user.createdAt)}
+                        </td>
+                        <td data-label="Actions">
+                          {!isSelf && (
+                            <button
+                              className={`btn ${user.status === 'active' ? 'btn-danger' : 'btn-success'}`}
+                              onClick={() =>
+                                handleStatusChange(
+                                  user.id,
+                                  user.status === 'active' ? 'suspended' : 'active'
+                                )
+                              }
+                              disabled={updating === user.id}
+                            >
+                              {user.status === 'active' ? 'Suspend' : 'Activate'}
+                            </button>
+                          )}
+                          {isSelf && (
+                            <span className="text-small text-muted">Current user</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
 
             {userList.length === 0 && (
               <p className="text-center text-muted" style={{ padding: '2rem' }}>

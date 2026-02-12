@@ -1,14 +1,33 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, machines } from '~/lib/db'
 import { checkEligibility } from '~/server/services/eligibility'
-import { calcom } from '~/server/services/calcom'
+import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
 import { Header } from '~/components/Header'
-import { AvailabilityPicker } from '~/components/AvailabilityPicker'
 import { reserveMachine } from '~/server/api/machines'
+
+function formatDateTimeLocal(date: Date) {
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  const hours = `${date.getHours()}`.padStart(2, '0')
+  const minutes = `${date.getMinutes()}`.padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+function formatDisplayDate(dateValue: Date | string) {
+  return new Date(dateValue).toLocaleString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
 
 const getReserveData = createServerFn({ method: 'GET' })
   .inputValidator((data: { machineId: string }) => data)
@@ -25,29 +44,13 @@ const getReserveData = createServerFn({ method: 'GET' })
 
     const eligibility = await checkEligibility(user.id, data.machineId)
 
-    if (!eligibility.eligible) {
-      throw new Response('Not eligible to reserve this machine', { status: 403 })
-    }
+    const now = new Date()
+    const horizon = new Date(now)
+    horizon.setDate(horizon.getDate() + 14)
 
-    // Fetch availability for next 14 days
-    let slots: { time: string }[] = []
-    if (machine.calcomEventTypeId) {
-      const startDate = new Date()
-      const endDate = new Date()
-      endDate.setDate(endDate.getDate() + 14)
+    const bookings = await getMachineBookingsInRange(machine.id, now, horizon)
 
-      try {
-        slots = await calcom.getAvailability(
-          machine.calcomEventTypeId,
-          startDate,
-          endDate
-        )
-      } catch (error) {
-        console.error('Failed to fetch availability:', error)
-      }
-    }
-
-    return { user, machine, slots }
+    return { user, machine, bookings, eligibility }
   })
 
 export const Route = createFileRoute('/machines/$machineId/reserve')({
@@ -58,38 +61,62 @@ export const Route = createFileRoute('/machines/$machineId/reserve')({
 })
 
 function ReserveMachinePage() {
-  const { user, machine, slots } = Route.useLoaderData()
+  const { user, machine, bookings, eligibility } = Route.useLoaderData()
   const navigate = useNavigate()
-  const [selectedSlot, setSelectedSlot] = useState<string | undefined>()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  const defaultRange = useMemo(() => {
+    const start = new Date()
+    start.setMinutes(0, 0, 0)
+    start.setHours(start.getHours() + 1)
+    const end = new Date(start)
+    end.setHours(end.getHours() + 1)
+    return {
+      start: formatDateTimeLocal(start),
+      end: formatDateTimeLocal(end),
+    }
+  }, [])
+
+  const [startTime, setStartTime] = useState(defaultRange.start)
+  const [endTime, setEndTime] = useState(defaultRange.end)
+
   const handleReserve = async () => {
-    if (!selectedSlot) return
+    const start = new Date(startTime)
+    const end = new Date(endTime)
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      setError('Please select valid start and end times.')
+      return
+    }
+
+    if (end <= start) {
+      setError('End time must be after start time.')
+      return
+    }
 
     setLoading(true)
     setError('')
 
     try {
-      // Calculate end time (assume 1 hour slots)
-      const startTime = new Date(selectedSlot)
-      const endTime = new Date(startTime)
-      endTime.setHours(endTime.getHours() + 1)
-
       const result = await reserveMachine({
         data: {
           machineId: machine.id,
-          startTime: startTime.toISOString(),
-          endTime: endTime.toISOString(),
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
         },
       })
 
       if (result.success) {
         navigate({ to: '/reservations' })
       } else {
-        setError(result.error || 'Failed to create reservation')
+        const reasonText =
+          result.reasons && result.reasons.length > 0
+            ? ` (${result.reasons.join('; ')})`
+            : ''
+        setError((result.error || 'Failed to create reservation request') + reasonText)
       }
-    } catch (err) {
+    } catch {
       setError('An error occurred. Please try again.')
     } finally {
       setLoading(false)
@@ -112,28 +139,41 @@ function ReserveMachinePage() {
             </Link>
           </div>
 
-          <h1 className="mb-3">Reserve {machine.name}</h1>
+          <h1 className="mb-3">Request Time on {machine.name}</h1>
 
           {error && <div className="alert alert-danger mb-2">{error}</div>}
 
-          <div className="card">
-            <h3 className="card-title mb-2">Select a Time Slot</h3>
-
-            {slots.length > 0 ? (
+          <div className="card mb-2">
+            <h3 className="card-title mb-2">Choose Start And End Time</h3>
+            {eligibility.eligible ? (
               <>
-                <AvailabilityPicker
-                  slots={slots}
-                  selectedSlot={selectedSlot}
-                  onSelect={setSelectedSlot}
-                />
+                <div className="form-group">
+                  <label className="form-label">Start Time</label>
+                  <input
+                    type="datetime-local"
+                    className="form-input"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">End Time</label>
+                  <input
+                    type="datetime-local"
+                    className="form-input"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                  />
+                </div>
 
                 <div className="mt-3 flex gap-2">
                   <button
                     className="btn btn-primary"
                     onClick={handleReserve}
-                    disabled={!selectedSlot || loading}
+                    disabled={loading}
                   >
-                    {loading ? 'Reserving...' : 'Confirm Reservation'}
+                    {loading ? 'Submitting...' : 'Submit Request'}
                   </button>
                   <Link
                     to="/machines/$machineId"
@@ -146,10 +186,47 @@ function ReserveMachinePage() {
               </>
             ) : (
               <div className="alert alert-warning">
-                {machine.calcomEventTypeId
-                  ? 'No available time slots found for the next 14 days.'
-                  : 'This machine is not configured for online scheduling. Please contact an administrator.'}
+                <p className="mb-1">
+                  You can view availability, but you are not eligible to book yet.
+                </p>
+                <ul className="eligibility-list">
+                  {eligibility.reasons.map((reason, idx) => (
+                    <li key={idx} className="eligibility-item">
+                      <span className="text-small">{reason}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h3 className="card-title mb-2">Upcoming Booked Times (Next 14 Days)</h3>
+            {bookings.length > 0 ? (
+              <div className="table-wrapper">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Start</th>
+                      <th>End</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bookings.map((booking) => (
+                      <tr key={booking.id}>
+                        <td>{formatDisplayDate(booking.startTime)}</td>
+                        <td>{formatDisplayDate(booking.endTime)}</td>
+                        <td style={{ textTransform: 'capitalize' }}>{booking.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-small text-muted">
+                No upcoming bookings in the next 14 days.
+              </p>
             )}
           </div>
         </div>

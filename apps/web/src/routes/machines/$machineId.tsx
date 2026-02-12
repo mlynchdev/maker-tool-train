@@ -1,10 +1,14 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { Outlet, createFileRoute, Link, useChildMatches } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
+import { useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, machines } from '~/lib/db'
 import { checkEligibility, getMachineRequirements } from '~/server/services/eligibility'
+import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
+import { getAvailableCheckoutBlocks } from '~/server/services/checkout-scheduling'
 import { Header } from '~/components/Header'
+import { requestCheckoutAppointment } from '~/server/api/machines'
 
 const getMachineData = createServerFn({ method: 'GET' })
   .inputValidator((data: { machineId: string }) => data)
@@ -21,8 +25,38 @@ const getMachineData = createServerFn({ method: 'GET' })
 
     const eligibility = await checkEligibility(user.id, data.machineId)
     const requirements = await getMachineRequirements(data.machineId)
+    const trainingComplete = eligibility.requirements.every((req) => req.completed)
 
-    return { user, machine, eligibility, requirements }
+    const rangeStart = new Date()
+    const rangeEnd = new Date(rangeStart)
+    rangeEnd.setDate(rangeEnd.getDate() + 21)
+    const bookingRangeEnd = new Date(rangeStart)
+    bookingRangeEnd.setDate(bookingRangeEnd.getDate() + 14)
+
+    const availableCheckoutBlocks =
+      trainingComplete && !eligibility.hasCheckout
+        ? await getAvailableCheckoutBlocks({
+            machineId: data.machineId,
+            startTime: rangeStart,
+            endTime: rangeEnd,
+          })
+        : []
+
+    const upcomingBookings = await getMachineBookingsInRange(
+      data.machineId,
+      rangeStart,
+      bookingRangeEnd
+    )
+
+    return {
+      user,
+      machine,
+      eligibility,
+      requirements,
+      trainingComplete,
+      availableCheckoutBlocks,
+      upcomingBookings,
+    }
   })
 
 export const Route = createFileRoute('/machines/$machineId')({
@@ -33,7 +67,67 @@ export const Route = createFileRoute('/machines/$machineId')({
 })
 
 function MachineDetailPage() {
-  const { user, machine, eligibility, requirements } = Route.useLoaderData()
+  const {
+    user,
+    machine,
+    eligibility,
+    requirements,
+    trainingComplete,
+    availableCheckoutBlocks,
+    upcomingBookings,
+  } = Route.useLoaderData()
+  const childMatches = useChildMatches()
+  const [checkoutBlocks, setCheckoutBlocks] = useState(availableCheckoutBlocks)
+  const [bookingBlockId, setBookingBlockId] = useState<string | null>(null)
+  const [checkoutMessage, setCheckoutMessage] = useState('')
+
+  if (childMatches.length > 0) {
+    return <Outlet />
+  }
+
+  const formatDateTime = (value: Date) =>
+    new Date(value).toLocaleString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+
+  const getReservationStatusBadgeClass = (status: string) => {
+    if (status === 'approved' || status === 'confirmed') return 'badge-success'
+    if (status === 'pending') return 'badge-warning'
+    if (status === 'cancelled' || status === 'rejected') return 'badge-danger'
+    return 'badge-info'
+  }
+
+  const handleBookCheckout = async (blockId: string) => {
+    setBookingBlockId(blockId)
+    setCheckoutMessage('')
+
+    try {
+      const result = await requestCheckoutAppointment({
+        data: {
+          machineId: machine.id,
+          blockId,
+        },
+      })
+
+      if (result.success) {
+        setCheckoutMessage(
+          'Checkout appointment booked. A manager/admin will meet you during that slot.'
+        )
+        setCheckoutBlocks((prev) => prev.filter((block) => block.id !== blockId))
+      } else {
+        setCheckoutMessage(result.error || 'Unable to book checkout appointment')
+      }
+    } catch {
+      setCheckoutMessage('Unable to book checkout appointment')
+    } finally {
+      setBookingBlockId(null)
+    }
+  }
 
   return (
     <div>
@@ -119,7 +213,7 @@ function MachineDetailPage() {
                     params={{ machineId: machine.id }}
                     className="btn btn-primary"
                   >
-                    Make Reservation
+                    Request Reservation
                   </Link>
                 </div>
               ) : (
@@ -140,6 +234,58 @@ function MachineDetailPage() {
                     <Link to="/training" className="btn btn-secondary mt-2">
                       Go to Training
                     </Link>
+                  )}
+
+                  {trainingComplete && !eligibility.hasCheckout && (
+                    <div className="mt-2">
+                      <p className="text-small text-muted mb-1">
+                        Training is complete. Book an in-person checkout slot to unlock
+                        reservations.
+                      </p>
+
+                      {checkoutMessage && (
+                        <div className="alert alert-info mb-2">{checkoutMessage}</div>
+                      )}
+
+                      {checkoutBlocks.length > 0 ? (
+                        <div className="table-wrapper">
+                          <table className="table">
+                            <thead>
+                              <tr>
+                                <th>Start</th>
+                                <th>End</th>
+                                <th>With</th>
+                                <th>Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {checkoutBlocks.map((block) => (
+                                <tr key={block.id}>
+                                  <td>{formatDateTime(block.startTime)}</td>
+                                  <td>{formatDateTime(block.endTime)}</td>
+                                  <td>{block.manager.name || block.manager.email}</td>
+                                  <td>
+                                    <button
+                                      className="btn btn-primary"
+                                      onClick={() => handleBookCheckout(block.id)}
+                                      disabled={bookingBlockId === block.id}
+                                    >
+                                      {bookingBlockId === block.id
+                                        ? 'Booking...'
+                                        : 'Book Checkout'}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="text-small text-muted">
+                          No checkout slots are currently available for this resource.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -185,6 +331,43 @@ function MachineDetailPage() {
               </div>
             </div>
           )}
+
+          <div className="card mt-2">
+            <h3 className="card-title mb-2">Upcoming Reservation Schedule (Next 14 Days)</h3>
+            {upcomingBookings.length > 0 ? (
+              <div className="table-wrapper">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Start</th>
+                      <th>End</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {upcomingBookings.map((booking) => (
+                      <tr key={booking.id}>
+                        <td>{formatDateTime(booking.startTime)}</td>
+                        <td>{formatDateTime(booking.endTime)}</td>
+                        <td>
+                          <span className={`badge ${getReservationStatusBadgeClass(booking.status)}`}>
+                            {booking.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-small text-muted">
+                No reserved blocks are scheduled in the next 14 days.
+              </p>
+            )}
+            <p className="text-small text-muted mt-1">
+              This shared schedule helps you plan project time before requesting a booking.
+            </p>
+          </div>
         </div>
       </main>
     </div>

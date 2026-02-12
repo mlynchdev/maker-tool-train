@@ -2,13 +2,13 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
 import { useState } from 'react'
-import { requireAdmin } from '~/server/auth/middleware'
+import { requireManager } from '~/server/auth/middleware'
 import { db, machines, trainingModules } from '~/lib/db'
 import { Header } from '~/components/Header'
 import { createMachine, updateMachine, setMachineRequirements } from '~/server/api/admin'
 
 const getAdminMachinesData = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await requireAdmin()
+  const user = await requireManager()
 
   const machineList = await db.query.machines.findMany({
     with: {
@@ -45,7 +45,9 @@ function AdminMachinesPage() {
   // Create form state
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
-  const [newCalcomId, setNewCalcomId] = useState('')
+  const [newResourceType, setNewResourceType] = useState<'machine' | 'tool'>(
+    'machine'
+  )
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -56,7 +58,7 @@ function AdminMachinesPage() {
         data: {
           name: newName,
           description: newDescription || undefined,
-          calcomEventTypeId: newCalcomId ? parseInt(newCalcomId) : undefined,
+          resourceType: newResourceType,
         },
       })
 
@@ -64,7 +66,7 @@ function AdminMachinesPage() {
         setMachineList((prev) => [...prev, { ...result.machine, requirements: [] }])
         setNewName('')
         setNewDescription('')
-        setNewCalcomId('')
+        setNewResourceType('machine')
         setShowCreate(false)
       }
     } catch (error) {
@@ -96,7 +98,10 @@ function AdminMachinesPage() {
 
       <main className="main">
         <div className="container">
-          <div className="flex flex-between flex-center mb-3">
+          <div
+            className="flex flex-between flex-center mb-3"
+            style={{ flexWrap: 'wrap', gap: '0.75rem' }}
+          >
             <h1>Manage Machines</h1>
             <button
               className="btn btn-primary"
@@ -131,14 +136,17 @@ function AdminMachinesPage() {
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Cal.com Event Type ID</label>
-                  <input
-                    type="number"
+                  <label className="form-label">Type</label>
+                  <select
                     className="form-input"
-                    value={newCalcomId}
-                    onChange={(e) => setNewCalcomId(e.target.value)}
-                    placeholder="Optional"
-                  />
+                    value={newResourceType}
+                    onChange={(e) =>
+                      setNewResourceType(e.target.value as 'machine' | 'tool')
+                    }
+                  >
+                    <option value="machine">Machine</option>
+                    <option value="tool">Tool</option>
+                  </select>
                 </div>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
                   {saving ? 'Creating...' : 'Create Machine'}
@@ -153,21 +161,21 @@ function AdminMachinesPage() {
               <div key={machine.id} className="card">
                 <div className="card-header">
                   <h3 className="card-title">{machine.name}</h3>
-                  <span
-                    className={`badge ${machine.active ? 'badge-success' : 'badge-danger'}`}
-                  >
-                    {machine.active ? 'Active' : 'Inactive'}
-                  </span>
+                  <div className="action-row">
+                    <span className="badge badge-info" style={{ textTransform: 'capitalize' }}>
+                      {machine.resourceType}
+                    </span>
+                    <span
+                      className={`badge ${machine.active ? 'badge-success' : 'badge-danger'}`}
+                    >
+                      {machine.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
                 </div>
 
                 {machine.description && (
                   <p className="text-small text-muted mb-2">{machine.description}</p>
                 )}
-
-                <div className="text-small mb-2">
-                  <strong>Cal.com Event Type:</strong>{' '}
-                  {machine.calcomEventTypeId || 'Not configured'}
-                </div>
 
                 <div className="mb-2">
                   <strong className="text-small">Training Requirements:</strong>
@@ -186,7 +194,7 @@ function AdminMachinesPage() {
                   )}
                 </div>
 
-                <div className="flex gap-1">
+                <div className="action-row">
                   <Link
                     to="/admin/machines/$machineId"
                     params={{ machineId: machine.id }}

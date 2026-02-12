@@ -86,7 +86,7 @@ function UserCheckoutPage() {
               ? {
                   ...s,
                   hasCheckout: true,
-                  checkout: result.checkout,
+                  checkout: s.checkout,
                   eligibility: { ...s.eligibility, hasCheckout: true },
                 }
               : s
@@ -154,45 +154,47 @@ function UserCheckoutPage() {
           <div className="card mb-3">
             <h3 className="card-title mb-2">Training Progress</h3>
             {member.trainingProgress.length > 0 ? (
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Module</th>
-                    <th>Progress</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {member.trainingProgress.map((progress) => {
-                    const percent = Math.floor(
-                      (progress.watchedSeconds / progress.module.durationSeconds) * 100
-                    )
-                    return (
-                      <tr key={progress.id}>
-                        <td>{progress.module.title}</td>
-                        <td>
-                          <div className="progress" style={{ width: '100px' }}>
-                            <div
-                              className={`progress-bar ${percent >= 90 ? 'complete' : ''}`}
-                              style={{ width: `${percent}%` }}
-                            />
-                          </div>
-                          <span className="text-small text-muted ml-1">
-                            {percent}%
-                          </span>
-                        </td>
-                        <td>
-                          {progress.completedAt ? (
-                            <span className="badge badge-success">Complete</span>
-                          ) : (
-                            <span className="badge badge-warning">In Progress</span>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+              <div className="table-wrapper">
+                <table className="table table-mobile-cards">
+                  <thead>
+                    <tr>
+                      <th>Module</th>
+                      <th>Progress</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {member.trainingProgress.map((progress) => {
+                      const percent = Math.floor(
+                        (progress.watchedSeconds / progress.module.durationSeconds) * 100
+                      )
+                      return (
+                        <tr key={progress.id}>
+                          <td data-label="Module">{progress.module.title}</td>
+                          <td data-label="Progress">
+                            <div>
+                              <div className="progress" style={{ width: '100px' }}>
+                                <div
+                                  className={`progress-bar ${percent >= 90 ? 'complete' : ''}`}
+                                  style={{ width: `${percent}%` }}
+                                />
+                              </div>
+                              <span className="text-small text-muted">{percent}%</span>
+                            </div>
+                          </td>
+                          <td data-label="Status">
+                            {progress.completedAt ? (
+                              <span className="badge badge-success">Complete</span>
+                            ) : (
+                              <span className="badge badge-warning">In Progress</span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <p className="text-muted">No training progress recorded.</p>
             )}
@@ -201,74 +203,76 @@ function UserCheckoutPage() {
           {/* Machine Checkouts */}
           <div className="card">
             <h3 className="card-title mb-2">Machine Checkouts</h3>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Machine</th>
-                  <th>Training</th>
-                  <th>Checkout Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {machineStatuses.map((status) => {
-                  const trainingComplete = status.eligibility.requirements.every(
-                    (r) => r.completed
-                  )
-                  return (
-                    <tr key={status.machine.id}>
-                      <td>{status.machine.name}</td>
-                      <td>
-                        {status.eligibility.requirements.length === 0 ? (
-                          <span className="text-muted">No requirements</span>
-                        ) : trainingComplete ? (
-                          <span className="badge badge-success">Complete</span>
-                        ) : (
-                          <span className="badge badge-warning">
-                            {status.eligibility.requirements.filter((r) => r.completed).length}/
-                            {status.eligibility.requirements.length}
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        {status.hasCheckout ? (
-                          <span className="badge badge-success">Approved</span>
-                        ) : (
-                          <span className="badge badge-warning">Pending</span>
-                        )}
-                      </td>
-                      <td>
-                        {status.hasCheckout ? (
-                          <button
-                            className="btn btn-danger"
-                            onClick={() => handleRevoke(status.machine.id)}
-                            disabled={processing === status.machine.id}
-                          >
-                            {processing === status.machine.id
-                              ? 'Revoking...'
-                              : 'Revoke'}
-                          </button>
-                        ) : trainingComplete ? (
-                          <button
-                            className="btn btn-success"
-                            onClick={() => handleApprove(status.machine.id)}
-                            disabled={processing === status.machine.id}
-                          >
-                            {processing === status.machine.id
-                              ? 'Approving...'
-                              : 'Approve'}
-                          </button>
-                        ) : (
-                          <span className="text-muted text-small">
-                            Training incomplete
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <div className="table-wrapper">
+              <table className="table table-mobile-cards">
+                <thead>
+                  <tr>
+                    <th>Machine</th>
+                    <th>Training</th>
+                    <th>Checkout Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {machineStatuses.map((status) => {
+                    const trainingComplete = status.eligibility.requirements.every(
+                      (r) => r.completed
+                    )
+                    return (
+                      <tr key={status.machine.id}>
+                        <td data-label="Machine">{status.machine.name}</td>
+                        <td data-label="Training">
+                          {status.eligibility.requirements.length === 0 ? (
+                            <span className="text-muted">No requirements</span>
+                          ) : trainingComplete ? (
+                            <span className="badge badge-success">Complete</span>
+                          ) : (
+                            <span className="badge badge-warning">
+                              {status.eligibility.requirements.filter((r) => r.completed).length}/
+                              {status.eligibility.requirements.length}
+                            </span>
+                          )}
+                        </td>
+                        <td data-label="Checkout Status">
+                          {status.hasCheckout ? (
+                            <span className="badge badge-success">Approved</span>
+                          ) : (
+                            <span className="badge badge-warning">Pending</span>
+                          )}
+                        </td>
+                        <td data-label="Actions">
+                          {status.hasCheckout ? (
+                            <button
+                              className="btn btn-danger"
+                              onClick={() => handleRevoke(status.machine.id)}
+                              disabled={processing === status.machine.id}
+                            >
+                              {processing === status.machine.id
+                                ? 'Revoking...'
+                                : 'Revoke'}
+                            </button>
+                          ) : trainingComplete ? (
+                            <button
+                              className="btn btn-success"
+                              onClick={() => handleApprove(status.machine.id)}
+                              disabled={processing === status.machine.id}
+                            >
+                              {processing === status.machine.id
+                                ? 'Approving...'
+                                : 'Approve'}
+                            </button>
+                          ) : (
+                            <span className="text-muted text-small">
+                              Training incomplete
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </main>

@@ -21,6 +21,7 @@ import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminTrainingRouteImport } from './routes/admin/training'
 import { Route as AdminMachinesRouteImport } from './routes/admin/machines'
 import { Route as AdminCheckoutsRouteImport } from './routes/admin/checkouts'
+import { Route as AdminBookingRequestsRouteImport } from './routes/admin/booking-requests'
 import { Route as MachinesMachineIdReserveRouteImport } from './routes/machines/$machineId.reserve'
 import { Route as ApiWebhooksCalcomRouteImport } from './routes/api/webhooks.calcom'
 import { Route as ApiSseBookingsRouteImport } from './routes/api/sse.bookings'
@@ -87,6 +88,11 @@ const AdminCheckoutsRoute = AdminCheckoutsRouteImport.update({
   path: '/admin/checkouts',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminBookingRequestsRoute = AdminBookingRequestsRouteImport.update({
+  id: '/admin/booking-requests',
+  path: '/admin/booking-requests',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MachinesMachineIdReserveRoute =
   MachinesMachineIdReserveRouteImport.update({
     id: '/reserve',
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/admin/booking-requests': typeof AdminBookingRequestsRoute
   '/admin/checkouts': typeof AdminCheckoutsRouteWithChildren
   '/admin/machines': typeof AdminMachinesRouteWithChildren
   '/admin/training': typeof AdminTrainingRoute
@@ -137,6 +144,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/admin/booking-requests': typeof AdminBookingRequestsRoute
   '/admin/checkouts': typeof AdminCheckoutsRouteWithChildren
   '/admin/machines': typeof AdminMachinesRouteWithChildren
   '/admin/training': typeof AdminTrainingRoute
@@ -157,6 +165,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/admin/booking-requests': typeof AdminBookingRequestsRoute
   '/admin/checkouts': typeof AdminCheckoutsRouteWithChildren
   '/admin/machines': typeof AdminMachinesRouteWithChildren
   '/admin/training': typeof AdminTrainingRoute
@@ -178,6 +187,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/register'
+    | '/admin/booking-requests'
     | '/admin/checkouts'
     | '/admin/machines'
     | '/admin/training'
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/register'
+    | '/admin/booking-requests'
     | '/admin/checkouts'
     | '/admin/machines'
     | '/admin/training'
@@ -216,6 +227,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/register'
+    | '/admin/booking-requests'
     | '/admin/checkouts'
     | '/admin/machines'
     | '/admin/training'
@@ -236,6 +248,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
   RegisterRoute: typeof RegisterRoute
+  AdminBookingRequestsRoute: typeof AdminBookingRequestsRoute
   AdminCheckoutsRoute: typeof AdminCheckoutsRouteWithChildren
   AdminMachinesRoute: typeof AdminMachinesRouteWithChildren
   AdminTrainingRoute: typeof AdminTrainingRoute
@@ -335,6 +348,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCheckoutsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/booking-requests': {
+      id: '/admin/booking-requests'
+      path: '/admin/booking-requests'
+      fullPath: '/admin/booking-requests'
+      preLoaderRoute: typeof AdminBookingRequestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/machines/$machineId/reserve': {
       id: '/machines/$machineId/reserve'
       path: '/reserve'
@@ -412,6 +432,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
   RegisterRoute: RegisterRoute,
+  AdminBookingRequestsRoute: AdminBookingRequestsRoute,
   AdminCheckoutsRoute: AdminCheckoutsRouteWithChildren,
   AdminMachinesRoute: AdminMachinesRouteWithChildren,
   AdminTrainingRoute: AdminTrainingRoute,

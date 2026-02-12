@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq, asc } from 'drizzle-orm'
 import { useState } from 'react'
-import { requireAdmin } from '~/server/auth/middleware'
+import { requireManager } from '~/server/auth/middleware'
 import { db, machines, trainingModules } from '~/lib/db'
 import { Header } from '~/components/Header'
 import { updateMachine, setMachineRequirements } from '~/server/api/admin'
@@ -10,7 +10,7 @@ import { updateMachine, setMachineRequirements } from '~/server/api/admin'
 const getMachineEditData = createServerFn({ method: 'GET' })
   .inputValidator((data: { machineId: string }) => data)
   .handler(async ({ data }) => {
-    const user = await requireAdmin()
+    const user = await requireManager()
 
     const machine = await db.query.machines.findFirst({
       where: eq(machines.id, data.machineId),
@@ -48,8 +48,8 @@ function EditMachinePage() {
 
   const [name, setName] = useState(machine.name)
   const [description, setDescription] = useState(machine.description || '')
-  const [calcomId, setCalcomId] = useState(
-    machine.calcomEventTypeId?.toString() || ''
+  const [resourceType, setResourceType] = useState<'machine' | 'tool'>(
+    machine.resourceType
   )
   const [selectedModules, setSelectedModules] = useState<
     Array<{ moduleId: string; percent: number }>
@@ -72,7 +72,7 @@ function EditMachinePage() {
           machineId: machine.id,
           name,
           description: description || undefined,
-          calcomEventTypeId: calcomId ? parseInt(calcomId) : undefined,
+          resourceType,
         },
       })
 
@@ -152,18 +152,19 @@ function EditMachinePage() {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Cal.com Event Type ID</label>
-                <input
-                  type="number"
+                <label className="form-label">Type</label>
+                <select
                   className="form-input"
-                  value={calcomId}
-                  onChange={(e) => setCalcomId(e.target.value)}
-                  placeholder="Leave empty if not using Cal.com"
-                />
-                <p className="text-small text-muted mt-1">
-                  This links the machine to a Cal.com event type for scheduling.
-                </p>
+                  value={resourceType}
+                  onChange={(e) =>
+                    setResourceType(e.target.value as 'machine' | 'tool')
+                  }
+                >
+                  <option value="machine">Machine</option>
+                  <option value="tool">Tool</option>
+                </select>
               </div>
+
             </div>
 
             <div className="card mb-3">
@@ -174,55 +175,56 @@ function EditMachinePage() {
               </p>
 
               {modules.length > 0 ? (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Required</th>
-                      <th>Module</th>
-                      <th>Min %</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {modules.map((module) => {
-                      const selected = selectedModules.find(
-                        (m) => m.moduleId === module.id
-                      )
-                      return (
-                        <tr key={module.id}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={!!selected}
-                              onChange={() => toggleModule(module.id)}
-                            />
-                          </td>
-                          <td>{module.title}</td>
-                          <td>
-                            {selected && (
+                <div className="table-wrapper">
+                  <table className="table table-mobile-cards">
+                    <thead>
+                      <tr>
+                        <th>Required</th>
+                        <th>Module</th>
+                        <th>Min %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {modules.map((module) => {
+                        const selected = selectedModules.find(
+                          (m) => m.moduleId === module.id
+                        )
+                        return (
+                          <tr key={module.id}>
+                            <td data-label="Required">
                               <input
-                                type="number"
-                                className="form-input"
-                                style={{ width: '80px' }}
-                                min="1"
-                                max="100"
-                                value={selected.percent}
-                                onChange={(e) =>
-                                  updatePercent(module.id, parseInt(e.target.value) || 90)
-                                }
+                                type="checkbox"
+                                checked={!!selected}
+                                onChange={() => toggleModule(module.id)}
                               />
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                            </td>
+                            <td data-label="Module">{module.title}</td>
+                            <td data-label="Min %">
+                              {selected && (
+                                <input
+                                  type="number"
+                                  className="form-input table-inline-input"
+                                  min="1"
+                                  max="100"
+                                  value={selected.percent}
+                                  onChange={(e) =>
+                                    updatePercent(module.id, parseInt(e.target.value) || 90)
+                                  }
+                                />
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
                 <p className="text-muted">No training modules available.</p>
               )}
             </div>
 
-            <div className="flex gap-2">
+            <div className="action-row">
               <button type="submit" className="btn btn-primary" disabled={saving}>
                 {saving ? 'Saving...' : 'Save Changes'}
               </button>
