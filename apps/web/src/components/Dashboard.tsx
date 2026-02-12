@@ -267,6 +267,20 @@ export function Dashboard({ user }: DashboardProps) {
                   </Link>
                 )}
 
+                {(user.role === 'manager' || user.role === 'admin') && (
+                  <Link to="/admin/users" className="card" style={{ textDecoration: 'none', color: 'inherit' }}>
+                    <div className="card-header">
+                      <h3 className="card-title">Users</h3>
+                      <span className="badge badge-warning">
+                        {user.role === 'admin' ? 'Admin' : 'Manager'}
+                      </span>
+                    </div>
+                    <p className="text-muted text-small">
+                      Manage member checkout access and view account details.
+                    </p>
+                  </Link>
+                )}
+
                 {user.role === 'admin' && (
                   <>
                     <Link to="/admin/training" className="card" style={{ textDecoration: 'none', color: 'inherit' }}>
@@ -279,15 +293,6 @@ export function Dashboard({ user }: DashboardProps) {
                       </p>
                     </Link>
 
-                    <Link to="/admin/users" className="card" style={{ textDecoration: 'none', color: 'inherit' }}>
-                      <div className="card-header">
-                        <h3 className="card-title">Users</h3>
-                        <span className="badge badge-warning">Admin</span>
-                      </div>
-                      <p className="text-muted text-small">
-                        Manage user accounts and roles.
-                      </p>
-                    </Link>
                   </>
                 )}
               </div>

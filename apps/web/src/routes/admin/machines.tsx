@@ -7,6 +7,13 @@ import { db, machines, trainingModules } from '~/lib/db'
 import { Header } from '~/components/Header'
 import { createMachine, updateMachine, setMachineRequirements } from '~/server/api/admin'
 
+const TRAINING_DURATION_OPTIONS = [
+  { value: 15, label: '15 minutes' },
+  { value: 30, label: '30 minutes' },
+  { value: 45, label: '45 minutes' },
+  { value: 60, label: '1 hour' },
+] as const
+
 const getAdminMachinesData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireManager()
 
@@ -49,6 +56,7 @@ function AdminMachinesPage() {
   const [newResourceType, setNewResourceType] = useState<'machine' | 'tool'>(
     'machine'
   )
+  const [newTrainingDurationMinutes, setNewTrainingDurationMinutes] = useState(30)
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -60,6 +68,7 @@ function AdminMachinesPage() {
           name: newName,
           description: newDescription || undefined,
           resourceType: newResourceType,
+          trainingDurationMinutes: newTrainingDurationMinutes,
         },
       })
 
@@ -68,6 +77,7 @@ function AdminMachinesPage() {
         setNewName('')
         setNewDescription('')
         setNewResourceType('machine')
+        setNewTrainingDurationMinutes(30)
         setShowCreate(false)
       }
     } catch (error) {
@@ -160,6 +170,20 @@ function AdminMachinesPage() {
                     <option value="tool">Tool</option>
                   </select>
                 </div>
+                <div className="form-group">
+                  <label className="form-label">Training Duration</label>
+                  <select
+                    className="form-input"
+                    value={newTrainingDurationMinutes}
+                    onChange={(e) => setNewTrainingDurationMinutes(Number(e.target.value))}
+                  >
+                    {TRAINING_DURATION_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
                   {saving ? 'Creating...' : 'Create Machine'}
                 </button>
@@ -188,6 +212,10 @@ function AdminMachinesPage() {
                 {machine.description && (
                   <p className="text-small text-muted mb-2">{machine.description}</p>
                 )}
+
+                <p className="text-small text-muted mb-2">
+                  Final checkout duration: {machine.trainingDurationMinutes} minutes
+                </p>
 
                 <div className="mb-2">
                   <strong className="text-small">Training Requirements:</strong>

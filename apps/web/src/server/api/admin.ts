@@ -7,6 +7,7 @@ import {
   db,
   users,
   machines,
+  checkoutAvailabilityRules,
   reservations,
   trainingModules,
   machineRequirements,
@@ -17,10 +18,37 @@ import { checkEligibility } from '../services/eligibility'
 import { emitCheckoutEvent } from '../services/events'
 import { moderateBookingRequest } from '../services/booking-workflow'
 import {
+  cancelCheckoutAppointmentByManager,
   createCheckoutAvailabilityBlock as createCheckoutAvailabilityBlockService,
   deactivateCheckoutAvailabilityBlock as deactivateCheckoutAvailabilityBlockService,
   getAdminCheckoutAvailability,
 } from '../services/checkout-scheduling'
+import {
+  getMakerspaceTimezone,
+  getSupportedIanaTimezones,
+  isValidIanaTimezone,
+  setMakerspaceTimezone,
+} from '../services/makerspace-settings'
+
+const trainingDurationMinutesSchema = z.union([
+  z.literal(15),
+  z.literal(30),
+  z.literal(45),
+  z.literal(60),
+])
+
+const timezoneSchema = z.string().min(1).refine((value) => isValidIanaTimezone(value), {
+  message: 'Invalid timezone',
+})
+
+function parseTimeToMinuteOfDay(value: string): number | null {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value)
+  if (!match) return null
+
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  return hours * 60 + minutes
+}
 
 // ============ Checkout Management (Manager+) ============
 
@@ -76,6 +104,38 @@ export const getPendingReservationRequestCount = createServerFn({
 
   return { count: requests.length }
 })
+
+export const getMakerspaceSettings = createServerFn({ method: 'GET' }).handler(async () => {
+  await requireAdmin()
+
+  return {
+    timezone: await getMakerspaceTimezone(),
+    timezoneOptions: getSupportedIanaTimezones(),
+  }
+})
+
+export const updateMakerspaceSettings = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        timezone: timezoneSchema,
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin()
+
+    const setting = await setMakerspaceTimezone(data.timezone)
+
+    await db
+      .update(checkoutAvailabilityRules)
+      .set({
+        timezone: data.timezone,
+        updatedAt: new Date(),
+      })
+
+    return { success: true, setting }
+  })
 
 export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
   async () => {
@@ -243,6 +303,16 @@ export const approveCheckout = createServerFn({ method: 'POST' })
       return { success: false, error: 'Machine not found' }
     }
 
+    const eligibility = await checkEligibility(data.userId, data.machineId)
+    const trainingComplete = eligibility.requirements.every((requirement) => requirement.completed)
+    if (!trainingComplete) {
+      return {
+        success: false,
+        error: 'Training requirements are not complete',
+        reasons: eligibility.reasons,
+      }
+    }
+
     // Check if checkout already exists
     const existingCheckout = await db.query.managerCheckouts.findFirst({
       where: and(
@@ -327,6 +397,7 @@ export const createMachine = createServerFn({ method: 'POST' })
         name: z.string().min(1),
         description: z.string().optional(),
         resourceType: z.enum(['machine', 'tool']).optional(),
+        trainingDurationMinutes: trainingDurationMinutesSchema.default(30),
       })
       .parse(data)
   )
@@ -339,6 +410,7 @@ export const createMachine = createServerFn({ method: 'POST' })
         name: data.name,
         description: data.description,
         resourceType: data.resourceType || 'machine',
+        trainingDurationMinutes: data.trainingDurationMinutes,
       })
       .returning()
 
@@ -353,6 +425,7 @@ export const updateMachine = createServerFn({ method: 'POST' })
         name: z.string().min(1).optional(),
         description: z.string().optional(),
         resourceType: z.enum(['machine', 'tool']).optional(),
+        trainingDurationMinutes: trainingDurationMinutesSchema.optional(),
         active: z.boolean().optional(),
       })
       .parse(data)
@@ -463,7 +536,7 @@ export const getCheckoutAvailability = createServerFn({ method: 'GET' })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    const admin = await requireAdmin()
+    const manager = await requireManager()
 
     const startTime = data?.startDate ? new Date(data.startDate) : new Date()
     const endTime = data?.endDate
@@ -471,7 +544,7 @@ export const getCheckoutAvailability = createServerFn({ method: 'GET' })
       : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
 
     return getAdminCheckoutAvailability({
-      managerId: admin.id,
+      managerId: manager.id,
       startTime,
       endTime,
     })
@@ -481,35 +554,60 @@ export const createCheckoutAvailabilityBlock = createServerFn({ method: 'POST' }
   .inputValidator((data: unknown) =>
     z
       .object({
-        machineId: z.string().uuid(),
-        startTime: z.string().datetime(),
-        endTime: z.string().datetime(),
+        dayOfWeek: z.number().int().min(0).max(6),
+        startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
+        endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
         notes: z.string().optional(),
       })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    const admin = await requireAdmin()
+    const manager = await requireManager()
+    const startMinuteOfDay = parseTimeToMinuteOfDay(data.startTime)
+    const endMinuteOfDay = parseTimeToMinuteOfDay(data.endTime)
+
+    if (startMinuteOfDay === null || endMinuteOfDay === null) {
+      return { success: false, error: 'Invalid start or end time' }
+    }
 
     return createCheckoutAvailabilityBlockService({
-      machineId: data.machineId,
-      managerId: admin.id,
-      startTime: new Date(data.startTime),
-      endTime: new Date(data.endTime),
+      managerId: manager.id,
+      dayOfWeek: data.dayOfWeek,
+      startMinuteOfDay,
+      endMinuteOfDay,
       notes: data.notes,
     })
   })
 
 export const deactivateCheckoutAvailabilityBlock = createServerFn({ method: 'POST' })
   .inputValidator((data: unknown) =>
-    z.object({ blockId: z.string().uuid() }).parse(data)
+    z.object({ ruleId: z.string().uuid() }).parse(data)
   )
   .handler(async ({ data }) => {
-    const admin = await requireAdmin()
+    const manager = await requireManager()
 
     return deactivateCheckoutAvailabilityBlockService({
-      blockId: data.blockId,
-      managerId: admin.id,
+      ruleId: data.ruleId,
+      managerId: manager.id,
+    })
+  })
+
+export const cancelCheckoutAppointment = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        appointmentId: z.string().uuid(),
+        reason: z.string().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const manager = await requireManager()
+
+    return cancelCheckoutAppointmentByManager({
+      appointmentId: data.appointmentId,
+      managerId: manager.id,
+      reason: data.reason,
     })
   })
 

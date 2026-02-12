@@ -30,6 +30,8 @@ export {
 export {
   getPendingCheckouts,
   getPendingReservationRequestCount,
+  getMakerspaceSettings,
+  updateMakerspaceSettings,
   getUserForCheckout,
   approveCheckout,
   revokeCheckout,
@@ -38,6 +40,7 @@ export {
   getCheckoutAvailability,
   createCheckoutAvailabilityBlock,
   deactivateCheckoutAvailabilityBlock,
+  cancelCheckoutAppointment,
   createMachine,
   updateMachine,
   setMachineRequirements,

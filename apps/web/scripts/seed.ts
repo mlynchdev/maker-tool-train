@@ -20,6 +20,21 @@ const db = drizzle(client, { schema })
 async function seed() {
   console.log('Seeding database...')
 
+  const defaultTimezone =
+    process.env.MAKERSPACE_TIMEZONE && process.env.MAKERSPACE_TIMEZONE.trim().length > 0
+      ? process.env.MAKERSPACE_TIMEZONE.trim()
+      : 'America/Los_Angeles'
+
+  await db
+    .insert(schema.appSettings)
+    .values({
+      key: 'makerspace.timezone',
+      value: defaultTimezone,
+    })
+    .onConflictDoNothing()
+
+  console.log('Configured makerspace timezone:', defaultTimezone)
+
   // Create admin user
   const adminPassword = await Bun.password.hash('admin123', {
     algorithm: 'argon2id',
@@ -116,16 +131,19 @@ async function seed() {
       name: 'Laser Cutter',
       description: 'High-precision laser cutting machine for various materials',
       calcomEventTypeId: 1, // Legacy field (unused by native scheduler)
+      trainingDurationMinutes: 60,
     },
     {
       name: '3D Printer',
       description: 'Industrial-grade 3D printer for prototyping',
       calcomEventTypeId: 2, // Legacy field (unused by native scheduler)
+      trainingDurationMinutes: 30,
     },
     {
       name: 'CNC Mill',
       description: 'Computer-controlled milling machine',
       calcomEventTypeId: 3, // Legacy field (unused by native scheduler)
+      trainingDurationMinutes: 45,
     },
   ]
 

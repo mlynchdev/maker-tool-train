@@ -19,6 +19,7 @@ import { Route as TrainingModuleIdRouteImport } from './routes/training/$moduleI
 import { Route as MachinesMachineIdRouteImport } from './routes/machines/$machineId'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminTrainingRouteImport } from './routes/admin/training'
+import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
 import { Route as AdminMachinesRouteImport } from './routes/admin/machines'
 import { Route as AdminCheckoutsRouteImport } from './routes/admin/checkouts'
 import { Route as AdminBookingRequestsRouteImport } from './routes/admin/booking-requests'
@@ -78,6 +79,11 @@ const AdminTrainingRoute = AdminTrainingRouteImport.update({
   path: '/admin/training',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminSettingsRoute = AdminSettingsRouteImport.update({
+  id: '/admin/settings',
+  path: '/admin/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminMachinesRoute = AdminMachinesRouteImport.update({
   id: '/admin/machines',
   path: '/admin/machines',
@@ -127,6 +133,7 @@ export interface FileRoutesByFullPath {
   '/admin/booking-requests': typeof AdminBookingRequestsRoute
   '/admin/checkouts': typeof AdminCheckoutsRouteWithChildren
   '/admin/machines': typeof AdminMachinesRouteWithChildren
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/training': typeof AdminTrainingRoute
   '/admin/users': typeof AdminUsersRoute
   '/machines/$machineId': typeof MachinesMachineIdRouteWithChildren
@@ -147,6 +154,7 @@ export interface FileRoutesByTo {
   '/admin/booking-requests': typeof AdminBookingRequestsRoute
   '/admin/checkouts': typeof AdminCheckoutsRouteWithChildren
   '/admin/machines': typeof AdminMachinesRouteWithChildren
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/training': typeof AdminTrainingRoute
   '/admin/users': typeof AdminUsersRoute
   '/machines/$machineId': typeof MachinesMachineIdRouteWithChildren
@@ -168,6 +176,7 @@ export interface FileRoutesById {
   '/admin/booking-requests': typeof AdminBookingRequestsRoute
   '/admin/checkouts': typeof AdminCheckoutsRouteWithChildren
   '/admin/machines': typeof AdminMachinesRouteWithChildren
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/training': typeof AdminTrainingRoute
   '/admin/users': typeof AdminUsersRoute
   '/machines/$machineId': typeof MachinesMachineIdRouteWithChildren
@@ -190,6 +199,7 @@ export interface FileRouteTypes {
     | '/admin/booking-requests'
     | '/admin/checkouts'
     | '/admin/machines'
+    | '/admin/settings'
     | '/admin/training'
     | '/admin/users'
     | '/machines/$machineId'
@@ -210,6 +220,7 @@ export interface FileRouteTypes {
     | '/admin/booking-requests'
     | '/admin/checkouts'
     | '/admin/machines'
+    | '/admin/settings'
     | '/admin/training'
     | '/admin/users'
     | '/machines/$machineId'
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | '/admin/booking-requests'
     | '/admin/checkouts'
     | '/admin/machines'
+    | '/admin/settings'
     | '/admin/training'
     | '/admin/users'
     | '/machines/$machineId'
@@ -251,6 +263,7 @@ export interface RootRouteChildren {
   AdminBookingRequestsRoute: typeof AdminBookingRequestsRoute
   AdminCheckoutsRoute: typeof AdminCheckoutsRouteWithChildren
   AdminMachinesRoute: typeof AdminMachinesRouteWithChildren
+  AdminSettingsRoute: typeof AdminSettingsRoute
   AdminTrainingRoute: typeof AdminTrainingRoute
   AdminUsersRoute: typeof AdminUsersRoute
   MachinesMachineIdRoute: typeof MachinesMachineIdRouteWithChildren
@@ -332,6 +345,13 @@ declare module '@tanstack/react-router' {
       path: '/admin/training'
       fullPath: '/admin/training'
       preLoaderRoute: typeof AdminTrainingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/settings': {
+      id: '/admin/settings'
+      path: '/admin/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AdminSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/machines': {
@@ -435,6 +455,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminBookingRequestsRoute: AdminBookingRequestsRoute,
   AdminCheckoutsRoute: AdminCheckoutsRouteWithChildren,
   AdminMachinesRoute: AdminMachinesRouteWithChildren,
+  AdminSettingsRoute: AdminSettingsRoute,
   AdminTrainingRoute: AdminTrainingRoute,
   AdminUsersRoute: AdminUsersRoute,
   MachinesMachineIdRoute: MachinesMachineIdRouteWithChildren,

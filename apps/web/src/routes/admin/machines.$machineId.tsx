@@ -7,6 +7,13 @@ import { db, machines, trainingModules } from '~/lib/db'
 import { Header } from '~/components/Header'
 import { updateMachine, setMachineRequirements } from '~/server/api/admin'
 
+const TRAINING_DURATION_OPTIONS = [
+  { value: 15, label: '15 minutes' },
+  { value: 30, label: '30 minutes' },
+  { value: 45, label: '45 minutes' },
+  { value: 60, label: '1 hour' },
+] as const
+
 const getMachineEditData = createServerFn({ method: 'GET' })
   .inputValidator((data: { machineId: string }) => data)
   .handler(async ({ data }) => {
@@ -51,6 +58,9 @@ function EditMachinePage() {
   const [resourceType, setResourceType] = useState<'machine' | 'tool'>(
     machine.resourceType
   )
+  const [trainingDurationMinutes, setTrainingDurationMinutes] = useState(
+    machine.trainingDurationMinutes
+  )
   const [selectedModules, setSelectedModules] = useState<
     Array<{ moduleId: string; percent: number }>
   >(
@@ -73,6 +83,7 @@ function EditMachinePage() {
           name,
           description: description || undefined,
           resourceType,
+          trainingDurationMinutes,
         },
       })
 
@@ -162,6 +173,21 @@ function EditMachinePage() {
                 >
                   <option value="machine">Machine</option>
                   <option value="tool">Tool</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Training Duration</label>
+                <select
+                  className="form-input"
+                  value={trainingDurationMinutes}
+                  onChange={(e) => setTrainingDurationMinutes(Number(e.target.value))}
+                >
+                  {TRAINING_DURATION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 

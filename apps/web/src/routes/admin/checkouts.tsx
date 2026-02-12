@@ -1,34 +1,44 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { asc, eq } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { useCallback, useEffect, useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
 import { db, users, machines } from '~/lib/db'
 import { checkEligibility } from '~/server/services/eligibility'
 import { getAdminCheckoutAvailability } from '~/server/services/checkout-scheduling'
+import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
 import { getNotificationsForUser } from '~/server/services/notifications'
 import { Header } from '~/components/Header'
 import {
   approveCheckout,
+  cancelCheckoutAppointment,
   createCheckoutAvailabilityBlock,
   deactivateCheckoutAvailabilityBlock,
 } from '~/server/api/admin'
 import { markMyNotificationRead } from '~/server/api/notifications'
 import { parseSSEMessage } from '~/lib/sse'
 
-function toDatetimeLocal(date: Date) {
-  const year = date.getFullYear()
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  const hours = `${date.getHours()}`.padStart(2, '0')
-  const minutes = `${date.getMinutes()}`.padStart(2, '0')
-  return `${year}-${month}-${day}T${hours}:${minutes}`
+const DAY_OPTIONS = [
+  { value: 0, label: 'Sunday' },
+  { value: 1, label: 'Monday' },
+  { value: 2, label: 'Tuesday' },
+  { value: 3, label: 'Wednesday' },
+  { value: 4, label: 'Thursday' },
+  { value: 5, label: 'Friday' },
+  { value: 6, label: 'Saturday' },
+] as const
+
+function formatMinuteOfDay(value: number) {
+  const hours24 = Math.floor(value / 60)
+  const minutes = value % 60
+  const suffix = hours24 >= 12 ? 'PM' : 'AM'
+  const hours12 = hours24 % 12 || 12
+  return `${hours12}:${`${minutes}`.padStart(2, '0')} ${suffix}`
 }
 
 const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireManager()
 
-  // Get all members
   const allUsers = await db.query.users.findMany({
     where: eq(users.role, 'member'),
     with: {
@@ -44,16 +54,13 @@ const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
     where: eq(machines.active, true),
   })
 
-  // Find users ready for checkout (completed training but no checkout)
   const pendingApprovals = []
 
   for (const member of allUsers) {
     if (member.status !== 'active') continue
 
     for (const machine of allMachines) {
-      const hasCheckout = member.managerCheckouts.some(
-        (c) => c.machineId === machine.id
-      )
+      const hasCheckout = member.managerCheckouts.some((c) => c.machineId === machine.id)
       if (hasCheckout) continue
 
       const eligibility = await checkEligibility(member.id, machine.id)
@@ -76,26 +83,18 @@ const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
     }
   }
 
-  const managedResources =
-    user.role === 'admin'
-      ? await db.query.machines.findMany({
-          where: eq(machines.active, true),
-          orderBy: [asc(machines.name)],
-        })
-      : []
-
-  const checkoutAvailability =
-    user.role === 'admin'
-      ? await getAdminCheckoutAvailability({
-          managerId: user.id,
-          startTime: new Date(),
-          endTime: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000),
-        })
-      : { blocks: [], appointments: [] }
+  const checkoutAvailability = await getAdminCheckoutAvailability({
+    managerId: user.id,
+    startTime: new Date(),
+    endTime: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000),
+  })
 
   const unreadNotifications = await getNotificationsForUser(user.id, true, 25)
 
-  const relevantNotificationTypes = ['checkout_appointment_booked']
+  const relevantNotificationTypes = [
+    'checkout_appointment_booked',
+    'checkout_appointment_cancelled',
+  ]
 
   const roleNotifications = unreadNotifications.filter((notification) =>
     relevantNotificationTypes.includes(notification.type)
@@ -103,9 +102,9 @@ const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
 
   return {
     user,
+    makerspaceTimezone: await getMakerspaceTimezone(),
     pendingApprovals,
-    managedResources,
-    checkoutAvailabilityBlocks: checkoutAvailability.blocks,
+    checkoutAvailabilityRules: checkoutAvailability.rules,
     checkoutAppointments: checkoutAvailability.appointments,
     roleNotifications,
   }
@@ -121,36 +120,33 @@ export const Route = createFileRoute('/admin/checkouts')({
 function CheckoutsPage() {
   const {
     user,
+    makerspaceTimezone: initialMakerspaceTimezone,
     pendingApprovals: initialApprovals,
-    managedResources,
-    checkoutAvailabilityBlocks: initialAvailabilityBlocks,
+    checkoutAvailabilityRules: initialAvailabilityRules,
     checkoutAppointments: initialCheckoutAppointments,
     roleNotifications: initialRoleNotifications,
   } = Route.useLoaderData()
+
   const [pendingApprovals, setPendingApprovals] = useState(initialApprovals)
   const [approving, setApproving] = useState<string | null>(null)
-  const [availabilityBlocks, setAvailabilityBlocks] = useState(initialAvailabilityBlocks)
-  const [checkoutAppointments, setCheckoutAppointments] = useState(
-    initialCheckoutAppointments
-  )
+
+  const [availabilityRules, setAvailabilityRules] = useState(initialAvailabilityRules)
+  const [checkoutAppointments, setCheckoutAppointments] = useState(initialCheckoutAppointments)
   const [roleNotifications, setRoleNotifications] = useState(initialRoleNotifications)
-  const [selectedMachineId, setSelectedMachineId] = useState(
-    managedResources[0]?.id || ''
-  )
-  const [creatingBlock, setCreatingBlock] = useState(false)
-  const [deactivatingBlockId, setDeactivatingBlockId] = useState<string | null>(null)
-  const [blockMessage, setBlockMessage] = useState('')
+  const [makerspaceTimezone, setMakerspaceTimezone] = useState(initialMakerspaceTimezone)
 
-  const defaultStart = new Date()
-  defaultStart.setMinutes(0, 0, 0)
-  defaultStart.setHours(defaultStart.getHours() + 1)
-  const defaultEnd = new Date(defaultStart)
-  defaultEnd.setHours(defaultEnd.getHours() + 1)
+  const [selectedDayOfWeek, setSelectedDayOfWeek] = useState(6)
+  const [ruleStartTime, setRuleStartTime] = useState('14:00')
+  const [ruleEndTime, setRuleEndTime] = useState('22:00')
+  const [ruleNotes, setRuleNotes] = useState('')
 
-  const [blockStart, setBlockStart] = useState(toDatetimeLocal(defaultStart))
-  const [blockEnd, setBlockEnd] = useState(toDatetimeLocal(defaultEnd))
-  const [blockNotes, setBlockNotes] = useState('')
+  const [creatingRule, setCreatingRule] = useState(false)
+  const [deactivatingRuleId, setDeactivatingRuleId] = useState<string | null>(null)
+  const [cancellingAppointmentId, setCancellingAppointmentId] = useState<string | null>(null)
+  const [availabilityMessage, setAvailabilityMessage] = useState('')
   const [markingNotificationId, setMarkingNotificationId] = useState<string | null>(null)
+
+  const now = new Date()
 
   const formatDateTime = (value: Date) =>
     new Date(value).toLocaleString('en-US', {
@@ -160,28 +156,22 @@ function CheckoutsPage() {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
+      timeZone: makerspaceTimezone,
     })
 
   const getNotificationTypeLabel = (type: string) => {
     if (type === 'checkout_appointment_booked') return 'Checkout appointment'
+    if (type === 'checkout_appointment_cancelled') return 'Checkout cancellation'
     return 'Notification'
-  }
-
-  const rangesOverlap = (
-    leftStart: Date,
-    leftEnd: Date,
-    rightStart: Date,
-    rightEnd: Date
-  ) => {
-    return leftStart < rightEnd && leftEnd > rightStart
   }
 
   const refreshAdminData = useCallback(async () => {
     const latest = await getCheckoutsData()
     setPendingApprovals(latest.pendingApprovals)
-    setAvailabilityBlocks(latest.checkoutAvailabilityBlocks)
+    setAvailabilityRules(latest.checkoutAvailabilityRules)
     setCheckoutAppointments(latest.checkoutAppointments)
     setRoleNotifications(latest.roleNotifications)
+    setMakerspaceTimezone(latest.makerspaceTimezone)
   }, [])
 
   const handleMarkNotificationRead = async (notificationId: string) => {
@@ -219,88 +209,98 @@ function CheckoutsPage() {
       } else {
         alert(result.error || 'Failed to approve checkout')
       }
-    } catch (error) {
+    } catch {
       alert('An error occurred')
     } finally {
       setApproving(null)
     }
   }
 
-  const handleCreateAvailabilityBlock = async (e: React.FormEvent) => {
+  const handleCreateAvailabilityRule = async (e: React.FormEvent) => {
     e.preventDefault()
-
-    if (!selectedMachineId) {
-      setBlockMessage('Select a resource before creating availability.')
-      return
-    }
-
-    const start = new Date(blockStart)
-    const end = new Date(blockEnd)
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
-      setBlockMessage('Provide a valid start/end time range.')
-      return
-    }
-
-    setCreatingBlock(true)
-    setBlockMessage('')
+    setCreatingRule(true)
+    setAvailabilityMessage('')
 
     try {
       const result = await createCheckoutAvailabilityBlock({
         data: {
-          machineId: selectedMachineId,
-          startTime: start.toISOString(),
-          endTime: end.toISOString(),
-          notes: blockNotes || undefined,
+          dayOfWeek: selectedDayOfWeek,
+          startTime: ruleStartTime,
+          endTime: ruleEndTime,
+          notes: ruleNotes || undefined,
         },
       })
 
       if (!result.success) {
-        setBlockMessage(result.error || 'Failed to create availability block.')
+        setAvailabilityMessage(result.error || 'Failed to create availability rule.')
         return
       }
 
-      const machine = managedResources.find((item) => item.id === selectedMachineId)
-
-      if (machine) {
-        setAvailabilityBlocks((prev) =>
-          [...prev, { ...result.data, machine }].sort(
-            (a, b) => +new Date(a.startTime) - +new Date(b.startTime)
-          )
-        )
-      }
-
-      setBlockNotes('')
-      setBlockMessage('Availability block created.')
+      setAvailabilityRules((prev) =>
+        [...prev, result.data].sort((left, right) => {
+          if (left.dayOfWeek !== right.dayOfWeek) return left.dayOfWeek - right.dayOfWeek
+          return left.startMinuteOfDay - right.startMinuteOfDay
+        })
+      )
+      setRuleNotes('')
+      setAvailabilityMessage('Recurring availability rule created.')
     } catch {
-      setBlockMessage('Failed to create availability block.')
+      setAvailabilityMessage('Failed to create availability rule.')
     } finally {
-      setCreatingBlock(false)
+      setCreatingRule(false)
     }
   }
 
-  const handleDeactivateAvailabilityBlock = async (blockId: string) => {
-    setDeactivatingBlockId(blockId)
-    setBlockMessage('')
+  const handleDeactivateAvailabilityRule = async (ruleId: string) => {
+    setDeactivatingRuleId(ruleId)
+    setAvailabilityMessage('')
 
     try {
       const result = await deactivateCheckoutAvailabilityBlock({
-        data: { blockId },
+        data: { ruleId },
       })
 
       if (!result.success) {
-        setBlockMessage(result.error || 'Failed to deactivate block.')
+        setAvailabilityMessage(result.error || 'Failed to deactivate rule.')
         return
       }
 
-      setAvailabilityBlocks((prev) =>
-        prev.map((block) =>
-          block.id === blockId ? { ...block, active: false, updatedAt: new Date() } : block
+      setAvailabilityRules((prev) =>
+        prev.map((rule) =>
+          rule.id === ruleId ? { ...rule, active: false, updatedAt: new Date() } : rule
         )
       )
     } catch {
-      setBlockMessage('Failed to deactivate block.')
+      setAvailabilityMessage('Failed to deactivate rule.')
     } finally {
-      setDeactivatingBlockId(null)
+      setDeactivatingRuleId(null)
+    }
+  }
+
+  const handleCancelAppointment = async (appointmentId: string) => {
+    const reason = prompt('Optional cancellation reason:') || undefined
+    setCancellingAppointmentId(appointmentId)
+    setAvailabilityMessage('')
+
+    try {
+      const result = await cancelCheckoutAppointment({
+        data: {
+          appointmentId,
+          reason,
+        },
+      })
+
+      if (!result.success) {
+        setAvailabilityMessage(result.error || 'Failed to cancel appointment.')
+        return
+      }
+
+      setCheckoutAppointments((prev) => prev.filter((item) => item.id !== appointmentId))
+      setAvailabilityMessage('Checkout appointment cancelled.')
+    } catch {
+      setAvailabilityMessage('Failed to cancel appointment.')
+    } finally {
+      setCancellingAppointmentId(null)
     }
   }
 
@@ -415,24 +415,18 @@ function CheckoutsPage() {
                           <td data-label="Member">
                             <div>{approval.user.name || approval.user.email}</div>
                             {approval.user.name && (
-                              <div className="text-small text-muted">
-                                {approval.user.email}
-                              </div>
+                              <div className="text-small text-muted">{approval.user.email}</div>
                             )}
                           </td>
                           <td data-label="Machine">{approval.machine.name}</td>
                           <td data-label="Training Status">
-                            <span className="badge badge-success">
-                              All training complete
-                            </span>
+                            <span className="badge badge-success">All training complete</span>
                           </td>
                           <td data-label="Actions">
                             <div className="flex gap-1">
                               <button
                                 className="btn btn-success"
-                                onClick={() =>
-                                  handleApprove(approval.user.id, approval.machine.id)
-                                }
+                                onClick={() => handleApprove(approval.user.id, approval.machine.id)}
                                 disabled={approving === key}
                               >
                                 {approving === key ? 'Approving...' : 'Approve'}
@@ -455,201 +449,193 @@ function CheckoutsPage() {
             </div>
           ) : (
             <div className="card">
-              <p className="text-center text-muted">
-                No pending checkout approvals.
-              </p>
+              <p className="text-center text-muted">No pending checkout approvals.</p>
               <p className="text-center text-small text-muted mt-1">
-                Members will appear here once they complete all required training
-                for a machine.
+                Members will appear here once they complete all required training for a machine.
               </p>
             </div>
           )}
 
           {user.role === 'admin' && (
-            <>
-              <div className="card mb-2">
-                <div className="flex flex-between flex-center" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-                  <p className="text-small text-muted">
-                    Reservation request moderation now has a dedicated queue.
-                  </p>
-                  <Link
-                    to="/admin/booking-requests"
-                    search={{ view: 'pending', q: '' }}
-                    className="btn btn-secondary"
-                  >
-                    Open Booking Requests
-                  </Link>
-                </div>
+            <div className="card mb-2">
+              <div className="flex flex-between flex-center" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+                <p className="text-small text-muted">
+                  Reservation request moderation now has a dedicated queue.
+                </p>
+                <Link
+                  to="/admin/booking-requests"
+                  search={{ view: 'pending', q: '' }}
+                  className="btn btn-secondary"
+                >
+                  Open Booking Requests
+                </Link>
               </div>
-
-              <h2 className="mt-3 mb-2">Checkout Availability</h2>
-              <div className="card mb-2">
-                <h3 className="card-title mb-2">Add Availability Block</h3>
-                <form onSubmit={handleCreateAvailabilityBlock}>
-                  <div className="form-group">
-                    <label className="form-label">Resource</label>
-                    <select
-                      className="form-input"
-                      value={selectedMachineId}
-                      onChange={(e) => setSelectedMachineId(e.target.value)}
-                      required
-                    >
-                      {managedResources.map((resource) => (
-                        <option key={resource.id} value={resource.id}>
-                          {resource.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Start Time</label>
-                    <input
-                      type="datetime-local"
-                      className="form-input"
-                      value={blockStart}
-                      onChange={(e) => setBlockStart(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">End Time</label>
-                    <input
-                      type="datetime-local"
-                      className="form-input"
-                      value={blockEnd}
-                      onChange={(e) => setBlockEnd(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Notes (Optional)</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={blockNotes}
-                      onChange={(e) => setBlockNotes(e.target.value)}
-                    />
-                  </div>
-
-                  {blockMessage && <div className="alert alert-info mb-2">{blockMessage}</div>}
-
-                  <button type="submit" className="btn btn-primary" disabled={creatingBlock}>
-                    {creatingBlock ? 'Saving...' : 'Add Block'}
-                  </button>
-                </form>
-              </div>
-
-              <div className="card mb-2">
-                <h3 className="card-title mb-2">Upcoming Availability Blocks</h3>
-                {availabilityBlocks.length > 0 ? (
-                  <div className="table-wrapper">
-                    <table className="table table-mobile-cards">
-                      <thead>
-                        <tr>
-                          <th>Resource</th>
-                          <th>Start</th>
-                          <th>End</th>
-                          <th>Status</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {availabilityBlocks.map((block) => {
-                          const hasScheduledAppointment = checkoutAppointments.some(
-                            (appointment) =>
-                              appointment.status === 'scheduled' &&
-                              appointment.machineId === block.machineId &&
-                              rangesOverlap(
-                                new Date(block.startTime),
-                                new Date(block.endTime),
-                                new Date(appointment.startTime),
-                                new Date(appointment.endTime)
-                              )
-                          )
-
-                          return (
-                            <tr key={block.id}>
-                              <td data-label="Resource">{block.machine.name}</td>
-                              <td data-label="Start">{formatDateTime(block.startTime)}</td>
-                              <td data-label="End">{formatDateTime(block.endTime)}</td>
-                              <td data-label="Status">
-                                {block.active ? (
-                                  hasScheduledAppointment ? (
-                                    <span className="badge badge-warning">Booked</span>
-                                  ) : (
-                                    <span className="badge badge-success">Open</span>
-                                  )
-                                ) : (
-                                  <span className="badge badge-danger">Inactive</span>
-                                )}
-                              </td>
-                              <td data-label="Actions">
-                                {block.active ? (
-                                  <button
-                                    className="btn btn-secondary"
-                                    onClick={() =>
-                                      handleDeactivateAvailabilityBlock(block.id)
-                                    }
-                                    disabled={deactivatingBlockId === block.id}
-                                  >
-                                    {deactivatingBlockId === block.id
-                                      ? 'Updating...'
-                                      : 'Deactivate'}
-                                  </button>
-                                ) : (
-                                  <span className="text-small text-muted">Unavailable</span>
-                                )}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="text-muted text-small">
-                    No availability blocks yet. Add one above so members can book checkout
-                    appointments.
-                  </p>
-                )}
-              </div>
-
-              <div className="card">
-                <h3 className="card-title mb-2">Scheduled Checkout Appointments</h3>
-                {checkoutAppointments.length > 0 ? (
-                  <div className="table-wrapper">
-                    <table className="table table-mobile-cards">
-                      <thead>
-                        <tr>
-                          <th>Member</th>
-                          <th>Resource</th>
-                          <th>Start</th>
-                          <th>End</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {checkoutAppointments.map((appointment) => (
-                          <tr key={appointment.id}>
-                            <td data-label="Member">
-                              {appointment.user.name || appointment.user.email}
-                            </td>
-                            <td data-label="Resource">{appointment.machine.name}</td>
-                            <td data-label="Start">{formatDateTime(appointment.startTime)}</td>
-                            <td data-label="End">{formatDateTime(appointment.endTime)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="text-muted text-small">No scheduled checkout appointments.</p>
-                )}
-              </div>
-            </>
+            </div>
           )}
+
+          <h2 className="mt-3 mb-2">Recurring Checkout Availability</h2>
+          <p className="text-small text-muted mb-2">
+            Availability and appointment times use timezone: <strong>{makerspaceTimezone}</strong>
+            {user.role === 'admin' ? ' (change in Admin Settings).' : '.'}
+          </p>
+          <div className="card mb-2">
+            <h3 className="card-title mb-2">Add Weekly Availability Rule</h3>
+            <form onSubmit={handleCreateAvailabilityRule}>
+              <div className="form-group">
+                <label className="form-label">Day Of Week</label>
+                <select
+                  className="form-input"
+                  value={selectedDayOfWeek}
+                  onChange={(e) => setSelectedDayOfWeek(Number(e.target.value))}
+                  required
+                >
+                  {DAY_OPTIONS.map((day) => (
+                    <option key={day.value} value={day.value}>
+                      {day.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Start Time</label>
+                <input
+                  type="time"
+                  className="form-input"
+                  value={ruleStartTime}
+                  onChange={(e) => setRuleStartTime(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">End Time</label>
+                <input
+                  type="time"
+                  className="form-input"
+                  value={ruleEndTime}
+                  onChange={(e) => setRuleEndTime(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Notes (Optional)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={ruleNotes}
+                  onChange={(e) => setRuleNotes(e.target.value)}
+                />
+              </div>
+
+              {availabilityMessage && (
+                <div className="alert alert-info mb-2">{availabilityMessage}</div>
+              )}
+
+              <button type="submit" className="btn btn-primary" disabled={creatingRule}>
+                {creatingRule ? 'Saving...' : 'Add Recurring Rule'}
+              </button>
+            </form>
+          </div>
+
+          <div className="card mb-2">
+            <h3 className="card-title mb-2">Recurring Rules</h3>
+            {availabilityRules.length > 0 ? (
+              <div className="table-wrapper">
+                <table className="table table-mobile-cards">
+                  <thead>
+                    <tr>
+                      <th>Day</th>
+                      <th>Start</th>
+                      <th>End</th>
+                      <th>Status</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {availabilityRules.map((rule) => (
+                      <tr key={rule.id}>
+                        <td data-label="Day">{DAY_OPTIONS[rule.dayOfWeek]?.label || 'Unknown'}</td>
+                        <td data-label="Start">{formatMinuteOfDay(rule.startMinuteOfDay)}</td>
+                        <td data-label="End">{formatMinuteOfDay(rule.endMinuteOfDay)}</td>
+                        <td data-label="Status">
+                          {rule.active ? (
+                            <span className="badge badge-success">Active</span>
+                          ) : (
+                            <span className="badge badge-danger">Inactive</span>
+                          )}
+                        </td>
+                        <td data-label="Actions">
+                          {rule.active ? (
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => handleDeactivateAvailabilityRule(rule.id)}
+                              disabled={deactivatingRuleId === rule.id}
+                            >
+                              {deactivatingRuleId === rule.id ? 'Updating...' : 'Deactivate'}
+                            </button>
+                          ) : (
+                            <span className="text-small text-muted">Unavailable</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-muted text-small">
+                No recurring rules yet. Add one above so members can book in-person final checkout slots.
+              </p>
+            )}
+          </div>
+
+          <div className="card">
+            <h3 className="card-title mb-2">Scheduled Checkout Appointments</h3>
+            {checkoutAppointments.length > 0 ? (
+              <div className="table-wrapper">
+                <table className="table table-mobile-cards">
+                  <thead>
+                    <tr>
+                      <th>Member</th>
+                      <th>Resource</th>
+                      <th>Start</th>
+                      <th>End</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {checkoutAppointments.map((appointment) => (
+                      <tr key={appointment.id}>
+                        <td data-label="Member">{appointment.user.name || appointment.user.email}</td>
+                        <td data-label="Resource">{appointment.machine.name}</td>
+                        <td data-label="Start">{formatDateTime(appointment.startTime)}</td>
+                        <td data-label="End">{formatDateTime(appointment.endTime)}</td>
+                        <td data-label="Actions">
+                          {new Date(appointment.startTime) > now ? (
+                            <button
+                              className="btn btn-danger"
+                              onClick={() => handleCancelAppointment(appointment.id)}
+                              disabled={cancellingAppointmentId === appointment.id}
+                            >
+                              {cancellingAppointmentId === appointment.id
+                                ? 'Cancelling...'
+                                : 'Cancel'}
+                            </button>
+                          ) : (
+                            <span className="text-small text-muted">Started</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-muted text-small">No scheduled checkout appointments.</p>
+            )}
+          </div>
         </div>
       </main>
     </div>
