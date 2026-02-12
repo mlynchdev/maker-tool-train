@@ -1,4 +1,8 @@
 const YOUTUBE_ID_REGEX = /^[a-zA-Z0-9_-]{11}$/
+const LOOSE_ID_WITH_SUFFIX_REGEX = /^([a-zA-Z0-9_-]{11})(?:[?&].*)?$/
+const EMBED_SRC_REGEX = /src=["']([^"']+)["']/i
+const LOOSE_YOUTUBE_ID_REGEX =
+  /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?.*v=|embed\/|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i
 
 export function normalizeYouTubeId(input: string): string | null {
   const trimmed = input.trim()
@@ -6,6 +10,17 @@ export function normalizeYouTubeId(input: string): string | null {
 
   if (YOUTUBE_ID_REGEX.test(trimmed)) {
     return trimmed
+  }
+
+  const idWithSuffixMatch = trimmed.match(LOOSE_ID_WITH_SUFFIX_REGEX)
+  if (idWithSuffixMatch && idWithSuffixMatch[1]) {
+    return idWithSuffixMatch[1]
+  }
+
+  // Support pasted iframe embed snippets by extracting src URL first.
+  const embedSrcMatch = trimmed.match(EMBED_SRC_REGEX)
+  if (embedSrcMatch?.[1]) {
+    return normalizeYouTubeId(embedSrcMatch[1])
   }
 
   let urlString = trimmed
@@ -48,7 +63,11 @@ export function normalizeYouTubeId(input: string): string | null {
     }
   }
 
-  if (!id) return null
+  if (!id) {
+    const looseMatch = trimmed.match(LOOSE_YOUTUBE_ID_REGEX)
+    if (!looseMatch?.[1]) return null
+    id = looseMatch[1]
+  }
 
   const cleaned = id.split(/[?&]/)[0]
   if (!YOUTUBE_ID_REGEX.test(cleaned)) return null

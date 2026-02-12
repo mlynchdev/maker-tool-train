@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm'
 import { useCallback, useRef, useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
+import { normalizeYouTubeId } from '~/lib/youtube'
 import { getModuleProgress, updateTrainingProgress } from '~/server/services/training'
 import { Header } from '~/components/Header'
 import { YouTubePlayer } from '~/components/YouTubePlayer'
@@ -22,9 +23,22 @@ const getModuleData = createServerFn({ method: 'GET' })
       throw new Response('Module not found', { status: 404 })
     }
 
+    const normalizedVideoId = normalizeYouTubeId(module.youtubeVideoId)
+    if (normalizedVideoId && normalizedVideoId !== module.youtubeVideoId) {
+      await db
+        .update(trainingModules)
+        .set({
+          youtubeVideoId: normalizedVideoId,
+          updatedAt: new Date(),
+        })
+        .where(eq(trainingModules.id, module.id))
+
+      module.youtubeVideoId = normalizedVideoId
+    }
+
     const progress = await getModuleProgress(user.id, data.moduleId)
 
-    return { user, module, progress }
+    return { user, module, progress, hasValidVideoId: Boolean(normalizedVideoId) }
   })
 
 export const Route = createFileRoute('/training/$moduleId')({
@@ -35,7 +49,7 @@ export const Route = createFileRoute('/training/$moduleId')({
 })
 
 function TrainingModulePage() {
-  const { user, module, progress } = Route.useLoaderData()
+  const { user, module, progress, hasValidVideoId } = Route.useLoaderData()
   const [currentProgress, setCurrentProgress] = useState(progress?.percentComplete || 0)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
@@ -123,12 +137,18 @@ function TrainingModulePage() {
           )}
 
           <div className="card mb-2">
-            <YouTubePlayer
-              videoId={module.youtubeVideoId}
-              onProgress={handleProgress}
-              initialPosition={progress?.lastPosition || 0}
-              initialWatchedSeconds={progress?.watchedSeconds || 0}
-            />
+            {hasValidVideoId ? (
+              <YouTubePlayer
+                videoId={module.youtubeVideoId}
+                onProgress={handleProgress}
+                initialPosition={progress?.lastPosition || 0}
+                initialWatchedSeconds={progress?.watchedSeconds || 0}
+              />
+            ) : (
+              <div className="alert alert-warning">
+                This training video is misconfigured. Ask an admin to update the YouTube URL/ID.
+              </div>
+            )}
 
             <div className="flex flex-between flex-center mb-1">
               <span className="text-small text-muted">
