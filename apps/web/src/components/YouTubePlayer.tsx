@@ -1,5 +1,6 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { loadYouTubeIframeAPI } from '~/lib/youtube-iframe'
+import { normalizeYouTubeId } from '~/lib/youtube'
 
 declare global {
   interface Window {
@@ -24,14 +25,17 @@ interface YouTubePlayerProps {
 }
 
 export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initialWatchedSeconds = 0 }: YouTubePlayerProps) {
+  const normalizedVideoId = useMemo(() => normalizeYouTubeId(videoId), [videoId])
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YT.Player | null>(null)
   const [isReady, setIsReady] = useState(false)
   const [speedWarning, setSpeedWarning] = useState(false)
+  const [playerError, setPlayerError] = useState<string | null>(null)
 
   // Progress tracking refs
   const watchedSecondsRef = useRef(initialWatchedSeconds)
   const lastPositionRef = useRef(initialPosition)
+  const initialPositionRef = useRef(initialPosition)
   const lastTickWallRef = useRef(0) // wall-clock ms of last tick; 0 = not actively tracking
   const lastReportWallRef = useRef(Date.now())
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -108,14 +112,32 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
   accumulateRef.current = accumulate
   const reportRef = useRef(report)
   reportRef.current = report
+  const handlePlaybackRateChangeRef = useRef(handlePlaybackRateChange)
+  handlePlaybackRateChangeRef.current = handlePlaybackRateChange
 
   useEffect(() => {
     let mounted = true
 
+    if (!normalizedVideoId) {
+      setPlayerError('Training video is misconfigured. Ask an admin to update the YouTube URL/ID.')
+      return () => {
+        mounted = false
+      }
+    }
+
     const initPlayer = async () => {
-      await loadYouTubeIframeAPI()
+      try {
+        await loadYouTubeIframeAPI()
+      } catch {
+        if (mounted) {
+          setPlayerError('Failed to load YouTube player.')
+        }
+        return
+      }
 
       if (!mounted || !containerRef.current) return
+
+      setPlayerError(null)
 
       // Clear any existing player
       if (playerRef.current) {
@@ -123,16 +145,17 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
       }
 
       playerRef.current = new window.YT.Player(containerRef.current, {
-        videoId,
+        videoId: normalizedVideoId,
         playerVars: {
           autoplay: 0,
           modestbranding: 1,
           rel: 0,
-          start: initialPosition,
+          start: initialPositionRef.current,
         },
         events: {
           onReady: () => {
             setIsReady(true)
+            setPlayerError(null)
           },
           onStateChange: (event: YT.OnStateChangeEvent) => {
             const state = event.data
@@ -150,7 +173,22 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
               lastTickWallRef.current = 0 // stop accumulating until next play
             }
           },
-          onPlaybackRateChange: handlePlaybackRateChange,
+          onError: (event: { data: number; target: YT.Player }) => {
+            if (event.data === 2) {
+              setPlayerError('Invalid YouTube video ID or URL.')
+              return
+            }
+            if (event.data === 100) {
+              setPlayerError('This YouTube video is missing or private.')
+              return
+            }
+            if (event.data === 101 || event.data === 150) {
+              setPlayerError('This video cannot be played in an embedded player.')
+              return
+            }
+            setPlayerError('Unable to play this YouTube video.')
+          },
+          onPlaybackRateChange: (e: YT.OnPlaybackRateChangeEvent) => handlePlaybackRateChangeRef.current(e),
         },
       })
     }
@@ -165,7 +203,7 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
         playerRef.current = null
       }
     }
-  }, [videoId, initialPosition, handlePlaybackRateChange])
+  }, [normalizedVideoId])
 
   // Set up progress tracking interval
   useEffect(() => {
@@ -194,6 +232,23 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
 
   return (
     <div>
+      {playerError && (
+        <div className="alert alert-warning">
+          {playerError}
+          {normalizedVideoId && (
+            <span>
+              {' '}
+              <a
+                href={`https://www.youtube.com/watch?v=${normalizedVideoId}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open on YouTube
+              </a>
+            </span>
+          )}
+        </div>
+      )}
       {speedWarning && (
         <div className="speed-warning">
           Maximum playback speed is 1.5x. Speed has been adjusted.

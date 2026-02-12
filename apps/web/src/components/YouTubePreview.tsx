@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { loadYouTubeIframeAPI } from '~/lib/youtube-iframe'
-import { formatDuration } from '~/lib/youtube'
+import { formatDuration, normalizeYouTubeId } from '~/lib/youtube'
 
 interface YouTubePreviewProps {
   videoId: string
@@ -9,6 +9,7 @@ interface YouTubePreviewProps {
 }
 
 export function YouTubePreview({ videoId, onMetadata, onError }: YouTubePreviewProps) {
+  const normalizedVideoId = useMemo(() => normalizeYouTubeId(videoId), [videoId])
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YT.Player | null>(null)
   const [title, setTitle] = useState<string | null>(null)
@@ -27,6 +28,15 @@ export function YouTubePreview({ videoId, onMetadata, onError }: YouTubePreviewP
     let mounted = true
     let retries = 0
     let retryTimeout: ReturnType<typeof setTimeout> | null = null
+
+    if (!normalizedVideoId) {
+      const message = 'Invalid YouTube URL or ID.'
+      setError(message)
+      onError?.(message)
+      return () => {
+        mounted = false
+      }
+    }
 
     const reportMetadata = () => {
       const player = playerRef.current
@@ -74,7 +84,8 @@ export function YouTubePreview({ videoId, onMetadata, onError }: YouTubePreviewP
       }
 
       playerRef.current = new window.YT.Player(containerRef.current, {
-        videoId,
+        host: 'https://www.youtube-nocookie.com',
+        videoId: normalizedVideoId,
         playerVars: {
           autoplay: 0,
           modestbranding: 1,
@@ -103,7 +114,7 @@ export function YouTubePreview({ videoId, onMetadata, onError }: YouTubePreviewP
         playerRef.current = null
       }
     }
-  }, [videoId, onMetadata, onError])
+  }, [normalizedVideoId, onMetadata, onError])
 
   return (
     <div>
