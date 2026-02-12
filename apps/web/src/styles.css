@@ -73,6 +73,13 @@ a:hover {
   color: #333;
 }
 
+.nav a.btn-primary,
+.nav a.btn-primary:hover,
+.nav a.btn-primary:visited {
+  color: #fff;
+  text-decoration: none;
+}
+
 .main {
   padding: 2rem 0;
 }
