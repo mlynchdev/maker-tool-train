@@ -793,6 +793,33 @@ export async function bookCheckoutAppointment(input: {
   return { success: true, data: bookingResult.data }
 }
 
+export async function cancelFutureCheckoutAppointmentsForUserMachine(input: {
+  userId: string
+  machineId: string
+  reason?: string
+}) {
+  const now = new Date()
+
+  return db
+    .update(checkoutAppointments)
+    .set({
+      status: 'cancelled',
+      cancellationReason: input.reason,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(checkoutAppointments.userId, input.userId),
+        eq(checkoutAppointments.machineId, input.machineId),
+        eq(checkoutAppointments.status, 'scheduled'),
+        gt(checkoutAppointments.startTime, now)
+      )
+    )
+    .returning({
+      id: checkoutAppointments.id,
+    })
+}
+
 export async function cancelCheckoutAppointmentByManager(input: {
   appointmentId: string
   managerId: string

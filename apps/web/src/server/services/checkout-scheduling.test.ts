@@ -97,6 +97,7 @@ vi.mock('./notifications', () => ({
 
 import {
   bookCheckoutAppointment,
+  cancelFutureCheckoutAppointmentsForUserMachine,
   cancelCheckoutAppointmentByManager,
   createCheckoutAvailabilityBlock,
 } from './checkout-scheduling'
@@ -553,6 +554,19 @@ describe('checkout-scheduling service', () => {
       success: false,
       error: 'You are already checked out for this machine or tool',
     })
+  })
+
+  it('cancels future scheduled appointments for a user/machine pair', async () => {
+    mockUpdateReturning({ id: 'appointment-future-1' })
+
+    const result = await cancelFutureCheckoutAppointmentsForUserMachine({
+      userId: 'member-1',
+      machineId: 'machine-1',
+      reason: 'Checkout approval revoked',
+    })
+
+    expect(result).toEqual([{ id: 'appointment-future-1' }])
+    expect(mocks.db.update).toHaveBeenCalledTimes(1)
   })
 
   it('cancels a scheduled future appointment by manager/admin', async () => {

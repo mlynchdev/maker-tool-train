@@ -18,6 +18,7 @@ import { checkEligibility } from '../services/eligibility'
 import { emitCheckoutEvent } from '../services/events'
 import { moderateBookingRequest } from '../services/booking-workflow'
 import {
+  cancelFutureCheckoutAppointmentsForUserMachine,
   cancelCheckoutAppointmentByManager,
   createCheckoutAvailabilityBlock as createCheckoutAvailabilityBlockService,
   deactivateCheckoutAvailabilityBlock as deactivateCheckoutAvailabilityBlockService,
@@ -377,6 +378,13 @@ export const revokeCheckout = createServerFn({ method: 'POST' })
       .delete(managerCheckouts)
       .where(eq(managerCheckouts.id, checkout.id))
 
+    const cancelledAppointments =
+      await cancelFutureCheckoutAppointmentsForUserMachine({
+        userId: data.userId,
+        machineId: data.machineId,
+        reason: 'Checkout approval revoked',
+      })
+
     // Emit real-time event
     emitCheckoutEvent(data.userId, {
       type: 'revoked',
@@ -385,7 +393,7 @@ export const revokeCheckout = createServerFn({ method: 'POST' })
       machineName: checkout.machine.name,
     })
 
-    return { success: true }
+    return { success: true, cancelledAppointments: cancelledAppointments.length }
   })
 
 // ============ Machine Management (Admin) ============
