@@ -15,12 +15,6 @@ training.example.com {
         respond "OK" 200
     }
 
-    # Webhook endpoint for Cal.com
-    # Allow internal network only in production
-    handle /api/webhooks/calcom {
-        reverse_proxy app:3000
-    }
-
     # Security headers
     header {
         X-Content-Type-Options nosniff
@@ -39,16 +33,3 @@ training.example.com {
         format json
     }
 }
-
-# Optional: Cal.com admin interface (internal access only)
-# Uncomment and configure for admin access
-# calcom-admin.example.com {
-#     # Restrict to internal IPs or VPN
-#     @internal {
-#         remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
-#     }
-#     handle @internal {
-#         reverse_proxy calcom-web:3000
-#     }
-#     respond "Forbidden" 403
-# }

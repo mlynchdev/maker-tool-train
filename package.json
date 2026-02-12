@@ -13,7 +13,6 @@
     "db:migrate": "bun run --cwd apps/web drizzle-kit migrate",
     "db:push": "bun run --cwd apps/web drizzle-kit push",
     "db:studio": "bun run --cwd apps/web drizzle-kit studio",
-    "test": "bun test",
-    "calcom:setup": "bun run apps/web/scripts/setup-calcom.ts"
+    "test": "bun test"
   }
 }

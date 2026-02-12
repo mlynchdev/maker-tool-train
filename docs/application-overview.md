@@ -6,7 +6,7 @@ Maker Tool Train is a training-gated machine reservation system for makerspaces,
 ## Core Workflow
 1. Members watch YouTube-hosted training videos inside the app, with progress tracked server-side.
 2. Managers perform an in-person checkout and record approval for each machine.
-3. Once both requirements are met, members can reserve equipment time slots via the scheduling integration.
+3. Once both requirements are met, members can request equipment time slots via the native scheduling workflow.
 
 ## Primary Users And Roles
 - Members: watch training, complete requirements, and book machines.
@@ -18,9 +18,11 @@ Maker Tool Train is a training-gated machine reservation system for makerspaces,
 - Configurable training requirements per machine.
 - Manager checkout approvals to replace paper sign-offs.
 - Self-service reservations with cancelation support.
+- Admin moderation workflow for booking requests (approve/reject/cancel).
+- Checkout appointment scheduling for in-person final sign-off.
 - Role-based access controls for member, manager, and admin tasks.
 - Real-time availability updates using Server-Sent Events.
-- Cal.com (self-hosted) integration for scheduling.
+- Persistent notifications for booking and checkout events.
 
 ## Data Model At A Glance
 - `users`: accounts with role and status.
@@ -29,13 +31,16 @@ Maker Tool Train is a training-gated machine reservation system for makerspaces,
 - `machine_requirements`: mapping of required training modules per machine.
 - `training_progress`: per-user watch progress and completion timestamps.
 - `manager_checkouts`: manager approval records for user-machine access.
-- `reservations`: local booking records synced with Cal.com.
+- `reservations`: native booking request records and moderation status.
+- `checkout_availability_blocks`: manager/admin-defined in-person checkout slots.
+- `checkout_appointments`: member bookings for checkout meetings.
+- `notifications`: persistent user notifications.
 - `sessions`: auth sessions for logged-in users.
 
 ## System Components
 - Web application: TanStack Start app in `apps/web`.
 - Database: PostgreSQL with Drizzle ORM schema in `apps/web/drizzle`.
-- Scheduling: Cal.com API v2 integration (self-hosted).
+- Scheduling: native scheduling services in app server code.
 - Real-time: Server-Sent Events for availability updates.
 
 ## Tech Stack
@@ -43,7 +48,7 @@ Maker Tool Train is a training-gated machine reservation system for makerspaces,
 - Framework: TanStack Start
 - Database: PostgreSQL + Drizzle ORM
 - Validation: Zod
-- Scheduling: Cal.com API v2 (self-hosted)
+- Scheduling: native booking + checkout appointment engine
 - Real-time: Server-Sent Events
 
 ## Repository Structure

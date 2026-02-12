@@ -42,8 +42,6 @@ Edit `.env` with your settings:
 DATABASE_URL=postgres://training:training_dev_password@localhost:5432/training
 AUTH_PROVIDER=dev
 SESSION_SECRET=your-random-32-character-secret-here
-CALCOM_API_URL=http://localhost:5555
-CALCOM_API_KEY=cal_live_your_api_key_here
 ```
 
 ### 4. Run Database Migrations
@@ -119,14 +117,6 @@ Create a `.env` file in the `deploy` directory:
 # App database
 POSTGRES_PASSWORD=secure-random-password
 
-# Cal.com
-CALCOM_DB_PASSWORD=secure-calcom-db-password
-CALCOM_API_KEY=cal_live_your_production_key
-CALCOM_WEBHOOK_SECRET=your-webhook-secret
-CALCOM_NEXTAUTH_SECRET=random-32-char-string
-CALCOM_ENCRYPTION_KEY=random-32-char-string
-CALCOM_JWT_SECRET=random-jwt-secret
-
 # App
 SESSION_SECRET=random-32-char-session-secret
 PUBLIC_URL=https://training.example.com
@@ -162,23 +152,14 @@ The app should be accessible at your configured domain with automatic HTTPS via 
 
 ---
 
-## Cal.com Configuration
+## Scheduling Configuration
 
-### Setting Up Cal.com Event Types
+Scheduling is managed natively in the app:
 
-1. Access the Cal.com admin UI (internal network only)
-2. Create event types for each machine
-3. Note the event type IDs
-4. Update machines in the admin panel with corresponding Cal.com event type IDs
-
-### Webhook Configuration
-
-Configure Cal.com to send webhooks to your app:
-
-1. In Cal.com admin, go to Settings > Developer > Webhooks
-2. Add webhook URL: `https://your-domain.com/api/webhooks/calcom`
-3. Select events: `BOOKING_CREATED`, `BOOKING_CANCELLED`, `BOOKING_RESCHEDULED`
-4. Set the webhook secret (must match `CALCOM_WEBHOOK_SECRET`)
+1. Admins/managers create machines/tools in `Admin > Machines`.
+2. Members submit booking requests for open time windows.
+3. Admins moderate pending requests from `Admin > Checkouts`.
+4. Admins define checkout availability blocks for in-person sign-offs.
 
 ---
 
@@ -207,12 +188,6 @@ bun run build
 # Check environment variables
 cat .env
 ```
-
-### Cal.com Integration Issues
-
-- Verify `CALCOM_API_URL` is accessible from the app container
-- Check API key permissions in Cal.com
-- Review webhook delivery logs in Cal.com admin
 
 ### Reset Development Database
 

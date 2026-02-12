@@ -24,7 +24,7 @@ The system acts as a policy engine, enforcing your makerspace's training require
 - **Self-Service Reservations** — Members book available time slots without staff involvement
 - **Role-Based Access** — Member, Manager, and Admin roles with appropriate permissions
 - **Real-Time Updates** — Server-Sent Events keep availability current across all users
-- **Cal.com Integration** — Leverages Cal.com's scheduling infrastructure (self-hosted)
+- **Native Scheduling Engine** — Local conflict checks, admin moderation, and checkout appointments
 
 ## Tech Stack
 
@@ -33,7 +33,7 @@ The system acts as a policy engine, enforcing your makerspace's training require
 | Runtime | Bun |
 | Framework | TanStack Start |
 | Database | PostgreSQL + Drizzle ORM |
-| Scheduling | Cal.com API v2 (self-hosted) |
+| Scheduling | Native scheduling workflow (Drizzle + TanStack Start server functions) |
 | Validation | Zod |
 | Real-time | Server-Sent Events |
 

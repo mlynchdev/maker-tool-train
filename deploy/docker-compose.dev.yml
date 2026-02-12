@@ -1,5 +1,4 @@
 # Development compose file - runs the app's database for local dev
-# Cal.com runs on a separate VPS — see docs/calcom-dev-setup.md
 #
 # Usage: docker compose -f docker-compose.dev.yml up -d
 

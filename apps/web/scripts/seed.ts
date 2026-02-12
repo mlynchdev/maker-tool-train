@@ -115,17 +115,17 @@ async function seed() {
     {
       name: 'Laser Cutter',
       description: 'High-precision laser cutting machine for various materials',
-      calcomEventTypeId: 1, // Update with actual Cal.com event type ID
+      calcomEventTypeId: 1, // Legacy field (unused by native scheduler)
     },
     {
       name: '3D Printer',
       description: 'Industrial-grade 3D printer for prototyping',
-      calcomEventTypeId: 2, // Update with actual Cal.com event type ID
+      calcomEventTypeId: 2, // Legacy field (unused by native scheduler)
     },
     {
       name: 'CNC Mill',
       description: 'Computer-controlled milling machine',
-      calcomEventTypeId: 3, // Update with actual Cal.com event type ID
+      calcomEventTypeId: 3, // Legacy field (unused by native scheduler)
     },
   ]
 
