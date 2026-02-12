@@ -220,7 +220,14 @@ function EditMachinePage() {
                   </table>
                 </div>
               ) : (
-                <p className="text-muted">No training modules available.</p>
+                <p className="text-muted">
+                  No training modules available.{' '}
+                  {user.role === 'admin' ? (
+                    <Link to="/admin/training">Create a training module.</Link>
+                  ) : (
+                    'Ask an admin to create one in Training Admin.'
+                  )}
+                </p>
               )}
             </div>
 
