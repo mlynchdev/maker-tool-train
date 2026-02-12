@@ -1,8 +1,13 @@
 import { Link, useNavigate } from '@tanstack/react-router'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import type { AuthUser } from '~/server/auth/types'
 import { logout } from '~/server/api/auth'
-import { getPendingCheckoutCount } from '~/server/api/admin'
+import { getMyUnreadNotificationCount } from '~/server/api/notifications'
+import {
+  getPendingCheckoutCount,
+  getPendingReservationRequestCount,
+} from '~/server/api/admin'
+import { parseSSEMessage } from '~/lib/sse'
 
 interface HeaderProps {
   user: AuthUser
@@ -10,13 +15,59 @@ interface HeaderProps {
 
 export function Header({ user }: HeaderProps) {
   const navigate = useNavigate()
-  const [pendingCount, setPendingCount] = useState(0)
+  const [pendingCheckoutCount, setPendingCheckoutCount] = useState(0)
+  const [pendingRequestCount, setPendingRequestCount] = useState(0)
+  const [unreadNotifications, setUnreadNotifications] = useState(0)
+
+  const refreshBadgeData = useCallback(async () => {
+    if (user.role === 'manager' || user.role === 'admin') {
+      const checkout = await getPendingCheckoutCount()
+      setPendingCheckoutCount(checkout.count)
+    } else {
+      setPendingCheckoutCount(0)
+    }
+
+    if (user.role === 'admin') {
+      const requests = await getPendingReservationRequestCount()
+      setPendingRequestCount(requests.count)
+    } else {
+      setPendingRequestCount(0)
+    }
+
+    const notifications = await getMyUnreadNotificationCount()
+    setUnreadNotifications(notifications.count)
+  }, [user.role])
 
   useEffect(() => {
-    if (user.role === 'manager' || user.role === 'admin') {
-      getPendingCheckoutCount().then((r) => setPendingCount(r.count))
+    refreshBadgeData()
+  }, [refreshBadgeData])
+
+  useEffect(() => {
+    const source = new EventSource('/api/sse/bookings')
+
+    source.onmessage = (event) => {
+      const message = parseSSEMessage(event.data)
+      if (!message) return
+
+      if (message.type === 'connected') return
+
+      if (
+        message.event === 'notification' ||
+        message.event === 'checkout' ||
+        message.event === 'booking'
+      ) {
+        refreshBadgeData()
+      }
     }
-  }, [user.role])
+
+    source.onerror = () => {
+      source.close()
+    }
+
+    return () => {
+      source.close()
+    }
+  }, [refreshBadgeData])
 
   const handleLogout = async () => {
     await logout()
@@ -36,14 +87,37 @@ export function Header({ user }: HeaderProps) {
           <Link to="/reservations">Reservations</Link>
 
           {(user.role === 'manager' || user.role === 'admin') && (
+            <Link to="/admin/machines">Resources</Link>
+          )}
+
+          {(user.role === 'manager' || user.role === 'admin') && (
             <Link to="/admin/checkouts" style={{ position: 'relative' }}>
               Checkouts
-              {pendingCount > 0 && (
+              {pendingCheckoutCount > 0 && (
                 <span className="badge badge-warning" style={{ marginLeft: '0.35rem' }}>
-                  {pendingCount}
+                  {pendingCheckoutCount}
                 </span>
               )}
             </Link>
+          )}
+
+          {user.role === 'admin' && (
+            <Link
+              to="/admin/booking-requests"
+              search={{ view: 'pending', q: '' }}
+              style={{ position: 'relative' }}
+            >
+              Booking Requests
+              {pendingRequestCount > 0 && (
+                <span className="badge badge-warning" style={{ marginLeft: '0.35rem' }}>
+                  {pendingRequestCount}
+                </span>
+              )}
+            </Link>
+          )}
+
+          {unreadNotifications > 0 && (
+            <span className="badge badge-info">{unreadNotifications} alerts</span>
           )}
 
           <span className="text-muted text-small">{user.email}</span>
