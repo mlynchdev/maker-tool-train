@@ -114,7 +114,7 @@ wait_for_migrate_success() {
 
   while ((elapsed < timeout_seconds)); do
     local container_id
-    container_id="$(compose ps -q migrate)"
+    container_id="$(compose ps -aq migrate | head -n1)"
 
     if [[ -n "${container_id}" ]]; then
       local status

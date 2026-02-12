@@ -5,6 +5,7 @@ dist/
 
 # Vite/Vinxi timestamp files
 app.config.timestamp_*.js
+vite.config.timestamp_*.js
 
 # Dependencies (handled at root level)
 node_modules/
