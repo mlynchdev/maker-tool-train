@@ -15,8 +15,9 @@ const registerSchema = z.object({
 })
 
 export const login = createServerFn({ method: 'POST' })
-  .handler(async (ctx) => {
-    const input = loginSchema.parse(ctx.data)
+  .inputValidator((data: unknown) => loginSchema.parse(data))
+  .handler(async ({ data }) => {
+    const input = data
     const auth = getAuthService()
 
     const user = await auth.verifyCredentials(input.email, input.password)
@@ -33,8 +34,9 @@ export const login = createServerFn({ method: 'POST' })
   })
 
 export const register = createServerFn({ method: 'POST' })
-  .handler(async (ctx) => {
-    const input = registerSchema.parse(ctx.data)
+  .inputValidator((data: unknown) => registerSchema.parse(data))
+  .handler(async ({ data }) => {
+    const input = data
     const auth = getAuthService()
 
     // Check if user already exists

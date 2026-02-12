@@ -10,18 +10,34 @@ export {
   getMachine,
   getMachineEligibility,
   getMachineAvailability,
+  getMachineCheckoutAvailability,
+  requestCheckoutAppointment,
   reserveMachine,
 } from './machines'
 
 // Reservations API
 export { getReservations, getReservation, cancelReservation } from './reservations'
 
+// Notifications API
+export {
+  getNotifications,
+  getMyUnreadNotificationCount,
+  markMyNotificationRead,
+  markAllMyNotificationsRead,
+} from './notifications'
+
 // Admin API
 export {
   getPendingCheckouts,
+  getPendingReservationRequestCount,
   getUserForCheckout,
   approveCheckout,
   revokeCheckout,
+  getPendingReservationRequests,
+  moderateReservationRequest,
+  getCheckoutAvailability,
+  createCheckoutAvailabilityBlock,
+  deactivateCheckoutAvailabilityBlock,
   createMachine,
   updateMachine,
   setMachineRequirements,

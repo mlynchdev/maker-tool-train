@@ -2,10 +2,14 @@ import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { requireAuth } from '../auth'
-import { db, machines, reservations, NewReservation } from '~/lib/db'
+import { db, machines } from '~/lib/db'
 import { checkEligibility, getMachineRequirements } from '../services/eligibility'
-import { calcom } from '../services/calcom'
-import { emitBookingEvent, broadcastMachineAvailabilityChange } from '../services/events'
+import { getMachineBookingsInRange } from '../services/booking-conflicts'
+import { createBookingRequest } from '../services/booking-workflow'
+import {
+  bookCheckoutAppointment,
+  getAvailableCheckoutBlocks,
+} from '../services/checkout-scheduling'
 
 export const getMachines = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireAuth()
@@ -92,17 +96,22 @@ export const getMachineAvailability = createServerFn({ method: 'GET' })
       })
     }
 
-    if (!machine.calcomEventTypeId) {
-      return { slots: [], error: 'Machine not configured for scheduling' }
-    }
-
-    const slots = await calcom.getAvailability(
-      machine.calcomEventTypeId,
+    const bookings = await getMachineBookingsInRange(
+      machine.id,
       new Date(data.startDate),
       new Date(data.endDate)
     )
 
-    return { slots }
+    return {
+      bookings: bookings.map((booking) => ({
+        id: booking.id,
+        userId: booking.userId,
+        userName: booking.user?.name || booking.user?.email || 'Member',
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        status: booking.status,
+      })),
+    }
   })
 
 const reserveSchema = z.object({
@@ -116,87 +125,80 @@ export const reserveMachine = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
-    // Check eligibility
-    const eligibility = await checkEligibility(user.id, data.machineId)
-    if (!eligibility.eligible) {
-      return {
-        success: false,
-        error: 'Not eligible to reserve this machine',
-        reasons: eligibility.reasons,
-      }
-    }
+    const result = await createBookingRequest({
+      userId: user.id,
+      machineId: data.machineId,
+      startTime: new Date(data.startTime),
+      endTime: new Date(data.endTime),
+    })
 
-    // Get machine for Cal.com event type
+    return result
+  })
+
+export const getMachineCheckoutAvailability = createServerFn({ method: 'GET' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        machineId: z.string().uuid(),
+        startDate: z.string().datetime().optional(),
+        endDate: z.string().datetime().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    await requireAuth()
+
     const machine = await db.query.machines.findFirst({
       where: eq(machines.id, data.machineId),
     })
 
     if (!machine) {
-      return { success: false, error: 'Machine not found' }
-    }
-
-    if (!machine.calcomEventTypeId) {
-      return { success: false, error: 'Machine not configured for scheduling' }
-    }
-
-    // Get user details for booking
-    const userRecord = await db.query.users.findFirst({
-      where: eq(db._.fullSchema.users.id, user.id),
-    })
-
-    if (!userRecord) {
-      return { success: false, error: 'User not found' }
-    }
-
-    // Create booking in Cal.com
-    let calcomBooking
-    try {
-      calcomBooking = await calcom.createBooking({
-        eventTypeId: machine.calcomEventTypeId,
-        start: new Date(data.startTime),
-        attendee: {
-          name: userRecord.name || userRecord.email,
-          email: userRecord.email,
-          timeZone: 'UTC',
-        },
-        metadata: {
-          machineId: data.machineId,
-          userId: user.id,
-        },
+      throw new Response(JSON.stringify({ error: 'Machine not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
       })
-    } catch (error) {
-      console.error('Cal.com booking error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to create booking',
-      }
     }
 
-    // Create local reservation record
-    const [reservation] = await db
-      .insert(reservations)
-      .values({
-        userId: user.id,
-        machineId: data.machineId,
-        calcomBookingId: calcomBooking.id.toString(),
-        calcomBookingUid: calcomBooking.uid,
-        startTime: new Date(data.startTime),
-        endTime: new Date(data.endTime),
-        status: 'confirmed',
-      } satisfies NewReservation)
-      .returning()
+    const startTime = data.startDate ? new Date(data.startDate) : new Date()
+    const endTime = data.endDate
+      ? new Date(data.endDate)
+      : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
 
-    // Emit real-time event
-    emitBookingEvent(user.id, {
-      type: 'created',
-      bookingId: reservation.id,
+    const blocks = await getAvailableCheckoutBlocks({
       machineId: data.machineId,
-      userId: user.id,
-      startTime: data.startTime,
-      endTime: data.endTime,
+      startTime,
+      endTime,
     })
 
-    broadcastMachineAvailabilityChange(data.machineId)
+    return {
+      blocks: blocks.map((block) => ({
+        id: block.id,
+        managerId: block.managerId,
+        managerName: block.manager.name || block.manager.email,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        notes: block.notes,
+      })),
+    }
+  })
 
-    return { success: true, reservation }
+export const requestCheckoutAppointment = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        machineId: z.string().uuid(),
+        blockId: z.string().uuid(),
+        notes: z.string().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const user = await requireAuth()
+
+    return bookCheckoutAppointment({
+      userId: user.id,
+      machineId: data.machineId,
+      blockId: data.blockId,
+      notes: data.notes,
+    })
   })
