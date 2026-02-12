@@ -66,7 +66,8 @@ export const eventBus = new EventBus()
 
 // Event types
 export interface BookingEvent {
-  type: 'created' | 'updated' | 'cancelled'
+  type: 'requested' | 'approved' | 'rejected' | 'updated' | 'cancelled'
+  status: string
   bookingId: string
   machineId: string
   userId: string
@@ -81,6 +82,15 @@ export interface CheckoutEvent {
   machineName: string
 }
 
+export interface NotificationEvent {
+  id: string
+  type: string
+  title: string
+  message: string
+  metadata?: Record<string, string | null>
+  createdAt: string
+}
+
 // Helper functions
 export function emitBookingEvent(userId: string, event: BookingEvent): void {
   eventBus.publishToUser(userId, 'booking', event)
@@ -88,6 +98,13 @@ export function emitBookingEvent(userId: string, event: BookingEvent): void {
 
 export function emitCheckoutEvent(userId: string, event: CheckoutEvent): void {
   eventBus.publishToUser(userId, 'checkout', event)
+}
+
+export function emitNotificationEvent(
+  userId: string,
+  event: NotificationEvent
+): void {
+  eventBus.publishToUser(userId, 'notification', event)
 }
 
 export function broadcastMachineAvailabilityChange(machineId: string): void {

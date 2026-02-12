@@ -7,6 +7,7 @@ import {
   db,
   users,
   machines,
+  reservations,
   trainingModules,
   machineRequirements,
   managerCheckouts,
@@ -14,6 +15,12 @@ import {
 } from '~/lib/db'
 import { checkEligibility } from '../services/eligibility'
 import { emitCheckoutEvent } from '../services/events'
+import { moderateBookingRequest } from '../services/booking-workflow'
+import {
+  createCheckoutAvailabilityBlock as createCheckoutAvailabilityBlockService,
+  deactivateCheckoutAvailabilityBlock as deactivateCheckoutAvailabilityBlockService,
+  getAdminCheckoutAvailability,
+} from '../services/checkout-scheduling'
 
 // ============ Checkout Management (Manager+) ============
 
@@ -54,6 +61,21 @@ export const getPendingCheckoutCount = createServerFn({ method: 'GET' }).handler
     return { count }
   }
 )
+
+export const getPendingReservationRequestCount = createServerFn({
+  method: 'GET',
+}).handler(async () => {
+  await requireAdmin()
+
+  const requests = await db.query.reservations.findMany({
+    where: eq(reservations.status, 'pending'),
+    columns: {
+      id: true,
+    },
+  })
+
+  return { count: requests.length }
+})
 
 export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
   async () => {
@@ -304,19 +326,19 @@ export const createMachine = createServerFn({ method: 'POST' })
       .object({
         name: z.string().min(1),
         description: z.string().optional(),
-        calcomEventTypeId: z.number().optional(),
+        resourceType: z.enum(['machine', 'tool']).optional(),
       })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    await requireAdmin()
+    await requireManager()
 
     const [machine] = await db
       .insert(machines)
       .values({
         name: data.name,
         description: data.description,
-        calcomEventTypeId: data.calcomEventTypeId,
+        resourceType: data.resourceType || 'machine',
       })
       .returning()
 
@@ -330,13 +352,13 @@ export const updateMachine = createServerFn({ method: 'POST' })
         machineId: z.string().uuid(),
         name: z.string().min(1).optional(),
         description: z.string().optional(),
-        calcomEventTypeId: z.number().optional(),
+        resourceType: z.enum(['machine', 'tool']).optional(),
         active: z.boolean().optional(),
       })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    await requireAdmin()
+    await requireManager()
 
     const { machineId, ...updates } = data
 
@@ -367,7 +389,7 @@ export const setMachineRequirements = createServerFn({ method: 'POST' })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    await requireAdmin()
+    await requireManager()
 
     // Delete existing requirements
     await db
@@ -389,6 +411,107 @@ export const setMachineRequirements = createServerFn({ method: 'POST' })
   })
 
 // ============ Training Module Management (Admin) ============
+
+export const getPendingReservationRequests = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    await requireAdmin()
+
+    const requests = await db.query.reservations.findMany({
+      where: eq(reservations.status, 'pending'),
+      with: {
+        user: true,
+        machine: true,
+      },
+      orderBy: [asc(reservations.startTime)],
+    })
+
+    return { requests }
+  }
+)
+
+export const moderateReservationRequest = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        reservationId: z.string().uuid(),
+        decision: z.enum(['approve', 'reject', 'cancel']),
+        notes: z.string().optional(),
+        reason: z.string().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const admin = await requireAdmin()
+
+    return moderateBookingRequest({
+      reservationId: data.reservationId,
+      reviewerId: admin.id,
+      decision: data.decision,
+      notes: data.notes,
+      reason: data.reason,
+    })
+  })
+
+export const getCheckoutAvailability = createServerFn({ method: 'GET' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        startDate: z.string().datetime().optional(),
+        endDate: z.string().datetime().optional(),
+      })
+      .optional()
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const admin = await requireAdmin()
+
+    const startTime = data?.startDate ? new Date(data.startDate) : new Date()
+    const endTime = data?.endDate
+      ? new Date(data.endDate)
+      : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+
+    return getAdminCheckoutAvailability({
+      managerId: admin.id,
+      startTime,
+      endTime,
+    })
+  })
+
+export const createCheckoutAvailabilityBlock = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        machineId: z.string().uuid(),
+        startTime: z.string().datetime(),
+        endTime: z.string().datetime(),
+        notes: z.string().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const admin = await requireAdmin()
+
+    return createCheckoutAvailabilityBlockService({
+      machineId: data.machineId,
+      managerId: admin.id,
+      startTime: new Date(data.startTime),
+      endTime: new Date(data.endTime),
+      notes: data.notes,
+    })
+  })
+
+export const deactivateCheckoutAvailabilityBlock = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z.object({ blockId: z.string().uuid() }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const admin = await requireAdmin()
+
+    return deactivateCheckoutAvailabilityBlockService({
+      blockId: data.blockId,
+      managerId: admin.id,
+    })
+  })
 
 export const createTrainingModule = createServerFn({ method: 'POST' })
   .inputValidator((data: unknown) =>
@@ -442,10 +565,11 @@ export const updateTrainingModule = createServerFn({ method: 'POST' })
     let normalizedVideoId: string | undefined
 
     if (updates.youtubeVideoId) {
-      normalizedVideoId = normalizeYouTubeId(updates.youtubeVideoId)
-      if (!normalizedVideoId) {
+      const normalized = normalizeYouTubeId(updates.youtubeVideoId)
+      if (!normalized) {
         return { success: false, error: 'Invalid YouTube URL or ID.' }
       }
+      normalizedVideoId = normalized
     }
 
     const [module] = await db
@@ -514,7 +638,7 @@ export const updateUser = createServerFn({ method: 'POST' })
 
 export const getAdminMachines = createServerFn({ method: 'GET' }).handler(
   async () => {
-    await requireAdmin()
+    await requireManager()
 
     const machineList = await db.query.machines.findMany({
       with: {

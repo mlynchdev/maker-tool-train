@@ -81,7 +81,6 @@ export async function createSSEHandler(request: Request): Promise<Response> {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
     },
   })
 }

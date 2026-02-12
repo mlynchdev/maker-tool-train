@@ -3,8 +3,7 @@ import { z } from 'zod'
 import { eq, and, gte, desc } from 'drizzle-orm'
 import { requireAuth } from '../auth'
 import { db, reservations } from '~/lib/db'
-import { calcom } from '../services/calcom'
-import { emitBookingEvent, broadcastMachineAvailabilityChange } from '../services/events'
+import { cancelBookingRequestByMember } from '../services/booking-workflow'
 
 export const getReservations = createServerFn({ method: 'GET' })
   .inputValidator((data: unknown) =>
@@ -74,55 +73,9 @@ export const cancelReservation = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
-    const reservation = await db.query.reservations.findFirst({
-      where: and(
-        eq(reservations.id, data.reservationId),
-        eq(reservations.userId, user.id)
-      ),
-    })
-
-    if (!reservation) {
-      return { success: false, error: 'Reservation not found' }
-    }
-
-    if (reservation.status === 'cancelled') {
-      return { success: false, error: 'Reservation already cancelled' }
-    }
-
-    if (reservation.startTime < new Date()) {
-      return { success: false, error: 'Cannot cancel past reservations' }
-    }
-
-    // Cancel in Cal.com if we have a booking UID
-    if (reservation.calcomBookingUid) {
-      try {
-        await calcom.cancelBooking(reservation.calcomBookingUid, data.reason)
-      } catch (error) {
-        console.error('Cal.com cancellation error:', error)
-        // Continue with local cancellation even if Cal.com fails
-      }
-    }
-
-    // Update local record
-    await db
-      .update(reservations)
-      .set({
-        status: 'cancelled',
-        updatedAt: new Date(),
-      })
-      .where(eq(reservations.id, data.reservationId))
-
-    // Emit real-time event
-    emitBookingEvent(user.id, {
-      type: 'cancelled',
-      bookingId: reservation.id,
-      machineId: reservation.machineId,
+    return cancelBookingRequestByMember({
+      reservationId: data.reservationId,
       userId: user.id,
-      startTime: reservation.startTime.toISOString(),
-      endTime: reservation.endTime.toISOString(),
+      reason: data.reason,
     })
-
-    broadcastMachineAvailabilityChange(reservation.machineId)
-
-    return { success: true }
   })

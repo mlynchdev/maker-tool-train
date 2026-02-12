@@ -106,15 +106,16 @@ export async function checkEligibility(
     }
   }
 
-  // 4. Check manager checkout exists
-  const checkout = await db.query.managerCheckouts.findFirst({
-    where: and(
-      eq(managerCheckouts.userId, userId),
-      eq(managerCheckouts.machineId, machineId)
-    ),
-  })
-
-  const hasCheckout = !!checkout
+  // 4. Check manager checkout exists (admins are implicitly checked out)
+  const hasCheckout =
+    user.role === 'admin'
+      ? true
+      : !!(await db.query.managerCheckouts.findFirst({
+          where: and(
+            eq(managerCheckouts.userId, userId),
+            eq(managerCheckouts.machineId, machineId)
+          ),
+        }))
 
   if (!hasCheckout) {
     reasons.push('Manager checkout not approved')

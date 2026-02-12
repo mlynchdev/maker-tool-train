@@ -4,6 +4,7 @@ import {
   uuid,
   varchar,
   text,
+  jsonb,
   integer,
   boolean,
   timestamp,
@@ -15,7 +16,24 @@ import { relations } from 'drizzle-orm'
 // Enums
 export const userRoleEnum = pgEnum('user_role', ['member', 'manager', 'admin'])
 export const userStatusEnum = pgEnum('user_status', ['active', 'suspended'])
+export const resourceTypeEnum = pgEnum('resource_type', ['machine', 'tool'])
+export const checkoutAppointmentStatusEnum = pgEnum('checkout_appointment_status', [
+  'scheduled',
+  'cancelled',
+  'completed',
+])
+export const notificationTypeEnum = pgEnum('notification_type', [
+  'booking_requested',
+  'booking_approved',
+  'booking_rejected',
+  'booking_cancelled',
+  'checkout_appointment_booked',
+  'checkout_appointment_cancelled',
+])
 export const reservationStatusEnum = pgEnum('reservation_status', [
+  'pending',
+  'approved',
+  'rejected',
   'confirmed',
   'cancelled',
   'completed',
@@ -38,6 +56,7 @@ export const machines = pgTable('machines', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 255 }).notNull(),
   description: text('description'),
+  resourceType: resourceTypeEnum('resource_type').default('machine').notNull(),
   calcomEventTypeId: integer('calcom_event_type_id'),
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -124,7 +143,7 @@ export const managerCheckouts = pgTable(
   })
 )
 
-// Reservations - booking records synced with Cal.com
+// Reservations - native booking requests (Cal.com fields retained for migration)
 export const reservations = pgTable(
   'reservations',
   {
@@ -139,14 +158,121 @@ export const reservations = pgTable(
     calcomBookingUid: varchar('calcom_booking_uid', { length: 100 }),
     startTime: timestamp('start_time').notNull(),
     endTime: timestamp('end_time').notNull(),
-    status: reservationStatusEnum('status').default('confirmed').notNull(),
+    status: reservationStatusEnum('status').default('pending').notNull(),
+    reviewedBy: uuid('reviewed_by').references(() => users.id),
+    reviewedAt: timestamp('reviewed_at'),
+    reviewNotes: text('review_notes'),
+    decisionReason: text('decision_reason'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },
   (table) => ({
     userStartIdx: index('user_start_idx').on(table.userId, table.startTime),
     machineStartIdx: index('machine_start_idx').on(table.machineId, table.startTime),
+    machineEndIdx: index('machine_end_idx').on(table.machineId, table.endTime),
+    machineStatusIdx: index('machine_status_idx').on(table.machineId, table.status),
+    reviewedByIdx: index('reservation_reviewed_by_idx').on(table.reviewedBy),
     calcomBookingIdx: index('calcom_booking_idx').on(table.calcomBookingId),
+  })
+)
+
+// Checkout availability blocks - admin/manager time windows for in-person checkout
+export const checkoutAvailabilityBlocks = pgTable(
+  'checkout_availability_blocks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    machineId: uuid('machine_id')
+      .references(() => machines.id, { onDelete: 'cascade' })
+      .notNull(),
+    managerId: uuid('manager_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    startTime: timestamp('start_time').notNull(),
+    endTime: timestamp('end_time').notNull(),
+    notes: text('notes'),
+    active: boolean('active').default(true).notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    machineStartIdx: index('checkout_block_machine_start_idx').on(
+      table.machineId,
+      table.startTime
+    ),
+    managerStartIdx: index('checkout_block_manager_start_idx').on(
+      table.managerId,
+      table.startTime
+    ),
+    activeIdx: index('checkout_block_active_idx').on(table.active),
+  })
+)
+
+// Checkout appointments - member bookings against checkout availability blocks
+export const checkoutAppointments = pgTable(
+  'checkout_appointments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    machineId: uuid('machine_id')
+      .references(() => machines.id, { onDelete: 'cascade' })
+      .notNull(),
+    managerId: uuid('manager_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    availabilityBlockId: uuid('availability_block_id').references(
+      () => checkoutAvailabilityBlocks.id,
+      { onDelete: 'set null' }
+    ),
+    startTime: timestamp('start_time').notNull(),
+    endTime: timestamp('end_time').notNull(),
+    status: checkoutAppointmentStatusEnum('status').default('scheduled').notNull(),
+    notes: text('notes'),
+    cancellationReason: text('cancellation_reason'),
+    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    userStartIdx: index('checkout_appt_user_start_idx').on(
+      table.userId,
+      table.startTime
+    ),
+    machineStartIdx: index('checkout_appt_machine_start_idx').on(
+      table.machineId,
+      table.startTime
+    ),
+    managerStartIdx: index('checkout_appt_manager_start_idx').on(
+      table.managerId,
+      table.startTime
+    ),
+    blockIdx: index('checkout_appt_block_idx').on(table.availabilityBlockId),
+  })
+)
+
+// Notifications - persistent user notifications
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    type: notificationTypeEnum('type').notNull(),
+    title: varchar('title', { length: 255 }).notNull(),
+    message: text('message').notNull(),
+    metadata: jsonb('metadata').$type<Record<string, string | null>>(),
+    readAt: timestamp('read_at'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    userCreatedIdx: index('notification_user_created_idx').on(
+      table.userId,
+      table.createdAt
+    ),
+    userReadIdx: index('notification_user_read_idx').on(table.userId, table.readAt),
+    userTypeIdx: index('notification_user_type_idx').on(table.userId, table.type),
   })
 )
 
@@ -172,7 +298,18 @@ export const usersRelations = relations(users, ({ many }) => ({
   trainingProgress: many(trainingProgress),
   managerCheckouts: many(managerCheckouts, { relationName: 'userCheckouts' }),
   approvedCheckouts: many(managerCheckouts, { relationName: 'approverCheckouts' }),
-  reservations: many(reservations),
+  reservations: many(reservations, { relationName: 'reservationOwner' }),
+  reviewedReservations: many(reservations, { relationName: 'reservationReviewer' }),
+  managedCheckoutAvailabilityBlocks: many(checkoutAvailabilityBlocks, {
+    relationName: 'checkoutBlockManager',
+  }),
+  checkoutAppointments: many(checkoutAppointments, {
+    relationName: 'checkoutAppointmentUser',
+  }),
+  hostedCheckoutAppointments: many(checkoutAppointments, {
+    relationName: 'checkoutAppointmentManager',
+  }),
+  notifications: many(notifications),
   sessions: many(sessions),
 }))
 
@@ -180,6 +317,8 @@ export const machinesRelations = relations(machines, ({ many }) => ({
   requirements: many(machineRequirements),
   checkouts: many(managerCheckouts),
   reservations: many(reservations),
+  checkoutAvailabilityBlocks: many(checkoutAvailabilityBlocks),
+  checkoutAppointments: many(checkoutAppointments),
 }))
 
 export const trainingModulesRelations = relations(trainingModules, ({ many }) => ({
@@ -233,10 +372,60 @@ export const reservationsRelations = relations(reservations, ({ one }) => ({
   user: one(users, {
     fields: [reservations.userId],
     references: [users.id],
+    relationName: 'reservationOwner',
+  }),
+  reviewer: one(users, {
+    fields: [reservations.reviewedBy],
+    references: [users.id],
+    relationName: 'reservationReviewer',
   }),
   machine: one(machines, {
     fields: [reservations.machineId],
     references: [machines.id],
+  }),
+}))
+
+export const checkoutAvailabilityBlocksRelations = relations(
+  checkoutAvailabilityBlocks,
+  ({ one, many }) => ({
+    machine: one(machines, {
+      fields: [checkoutAvailabilityBlocks.machineId],
+      references: [machines.id],
+    }),
+    manager: one(users, {
+      fields: [checkoutAvailabilityBlocks.managerId],
+      references: [users.id],
+      relationName: 'checkoutBlockManager',
+    }),
+    appointments: many(checkoutAppointments),
+  })
+)
+
+export const checkoutAppointmentsRelations = relations(checkoutAppointments, ({ one }) => ({
+  user: one(users, {
+    fields: [checkoutAppointments.userId],
+    references: [users.id],
+    relationName: 'checkoutAppointmentUser',
+  }),
+  manager: one(users, {
+    fields: [checkoutAppointments.managerId],
+    references: [users.id],
+    relationName: 'checkoutAppointmentManager',
+  }),
+  machine: one(machines, {
+    fields: [checkoutAppointments.machineId],
+    references: [machines.id],
+  }),
+  availabilityBlock: one(checkoutAvailabilityBlocks, {
+    fields: [checkoutAppointments.availabilityBlockId],
+    references: [checkoutAvailabilityBlocks.id],
+  }),
+}))
+
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
   }),
 }))
 
@@ -259,4 +448,10 @@ export type TrainingProgress = typeof trainingProgress.$inferSelect
 export type ManagerCheckout = typeof managerCheckouts.$inferSelect
 export type Reservation = typeof reservations.$inferSelect
 export type NewReservation = typeof reservations.$inferInsert
+export type CheckoutAvailabilityBlock = typeof checkoutAvailabilityBlocks.$inferSelect
+export type NewCheckoutAvailabilityBlock = typeof checkoutAvailabilityBlocks.$inferInsert
+export type CheckoutAppointment = typeof checkoutAppointments.$inferSelect
+export type NewCheckoutAppointment = typeof checkoutAppointments.$inferInsert
+export type Notification = typeof notifications.$inferSelect
+export type NewNotification = typeof notifications.$inferInsert
 export type Session = typeof sessions.$inferSelect
