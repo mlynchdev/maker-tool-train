@@ -1,6 +1,6 @@
 # Startup Guide
 
-This guide covers how to run the Training & Reservation System in development and production environments.
+This guide covers how to run the Training & Reservation System in development and staging/production environments.
 
 ## Development Setup
 
@@ -14,10 +14,10 @@ This guide covers how to run the Training & Reservation System in development an
 
 ```bash
 cd deploy
-docker-compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml up -d
 ```
 
-This starts a PostgreSQL container on port 5432 with:
+This starts a PostgreSQL container exposed on port 5433 with:
 - User: `training`
 - Password: `training_dev_password`
 - Database: `training`
@@ -39,7 +39,7 @@ cp .env.example .env
 Edit `.env` with your settings:
 
 ```env
-DATABASE_URL=postgres://training:training_dev_password@localhost:5432/training
+DATABASE_URL=postgres://training:training_dev_password@localhost:5433/training
 AUTH_PROVIDER=dev
 SESSION_SECRET=your-random-32-character-secret-here
 ```
@@ -83,7 +83,7 @@ cd apps/web
 bun run dev
 ```
 
-The app will be available at http://localhost:3000
+The app will be available at http://localhost:3001
 
 ---
 
@@ -107,48 +107,57 @@ This opens Drizzle Studio at https://local.drizzle.studio
 
 ---
 
-## Production Deployment
+## Staging (Beta) Deployment
 
 ### 1. Configure Environment
 
-Create a `.env` file in the `deploy` directory:
+Create a `.env` file in the `deploy` directory (you can start from `deploy/.env.staging.example`):
 
 ```env
-# App database
-POSTGRES_PASSWORD=secure-random-password
+# Isolates resources for this stack
+COMPOSE_PROJECT_NAME=training-staging
 
-# App
-SESSION_SECRET=random-32-char-session-secret
-PUBLIC_URL=https://training.example.com
+# Public staging hostname and canonical URL
+APP_HOST=beta.example.com
+PUBLIC_URL=https://beta.example.com
+ACME_EMAIL=ops@example.com
+
+# App configuration
+AUTH_PROVIDER=dev
+
+# Secrets
+POSTGRES_PASSWORD=replace-with-long-random-password
+SESSION_SECRET=replace-with-random-32-char-plus-secret
 ```
 
-### 2. Update Caddyfile
-
-Edit `deploy/caddy/Caddyfile` and replace `training.example.com` with your domain.
-
-### 3. Build and Start
+### 2. Build and Start (Migrations Included)
 
 ```bash
 cd deploy
-docker-compose up -d --build
+./staging-deploy.sh
 ```
 
-### 4. Run Migrations
+This script performs preflight checks (required env vars, placeholder values, Compose validation), then runs `docker compose up -d --build`. The `migrate` service (`bun run db:push`) runs automatically before the app starts.
 
-```bash
-docker-compose exec app bun run db:push
-```
-
-### 5. Verify Deployment
+### 3. Verify Deployment
 
 Check service health:
 
 ```bash
-docker-compose ps
-docker-compose logs app
+docker compose ps
+docker compose logs migrate
+docker compose logs app
 ```
 
 The app should be accessible at your configured domain with automatic HTTPS via Caddy.
+
+## Production Deployment
+
+Use the same steps as staging, but with:
+- A production domain (for example `training.example.com`)
+- Production secrets
+- A distinct project name (for example `COMPOSE_PROJECT_NAME=training-prod`)
+- `AUTH_PROVIDER` set to your production auth provider when ready
 
 ---
 
@@ -169,13 +178,13 @@ Scheduling is managed natively in the app:
 
 ```bash
 # Check if PostgreSQL is running
-docker-compose -f docker-compose.dev.yml ps
+docker compose -f docker-compose.dev.yml ps
 
 # View PostgreSQL logs
-docker-compose -f docker-compose.dev.yml logs postgres
+docker compose -f docker-compose.dev.yml logs postgres
 
 # Test connection
-psql postgres://training:training_dev_password@localhost:5432/training
+psql postgres://training:training_dev_password@localhost:5433/training
 ```
 
 ### App Won't Start
@@ -193,8 +202,8 @@ cat .env
 
 ```bash
 cd deploy
-docker-compose -f docker-compose.dev.yml down -v
-docker-compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml down -v
+docker compose -f docker-compose.dev.yml up -d
 
 cd ../apps/web
 bun run db:push

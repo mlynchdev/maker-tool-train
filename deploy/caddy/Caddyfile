@@ -1,12 +1,12 @@
 # Caddyfile for Training & Reservation System
-# Replace training.example.com with your actual domain
+# Configure APP_HOST and ACME_EMAIL via deploy/.env
 
 {
     # Global options
-    email admin@example.com
+    email {$ACME_EMAIL:admin@example.com}
 }
 
-training.example.com {
+{$APP_HOST:training.example.com} {
     # Main application
     reverse_proxy app:3000
 
