@@ -28,6 +28,9 @@ USER bunjs
 COPY --from=builder --chown=bunjs:nodejs /app/.output ./.output
 COPY --from=builder --chown=bunjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=bunjs:nodejs /app/package.json ./package.json
+COPY --from=builder --chown=bunjs:nodejs /app/drizzle ./drizzle
+COPY --from=builder --chown=bunjs:nodejs /app/drizzle.config.ts ./drizzle.config.ts
+COPY --from=builder --chown=bunjs:nodejs /app/tsconfig.json ./tsconfig.json
 
 EXPOSE 3000
 

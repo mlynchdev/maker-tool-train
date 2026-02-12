@@ -6,6 +6,7 @@ import {
   createRootRoute,
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
+import appStylesHref from '../styles.css?url'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -16,7 +17,7 @@ export const Route = createRootRoute({
       { title: 'Training & Reservation System' },
     ],
     links: [
-      { rel: 'stylesheet', href: '/styles.css' },
+      { rel: 'stylesheet', href: appStylesHref },
     ],
   }),
   component: RootComponent,
