@@ -90,6 +90,8 @@ export function Header({ user }: HeaderProps) {
             <Link to="/admin/machines">Resources</Link>
           )}
 
+          {user.role === 'admin' && <Link to="/admin/training">Training Admin</Link>}
+
           {(user.role === 'manager' || user.role === 'admin') && (
             <Link to="/admin/checkouts" style={{ position: 'relative' }}>
               Checkouts

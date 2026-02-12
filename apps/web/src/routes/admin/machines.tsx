@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { Outlet, createFileRoute, Link, useChildMatches } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
 import { useState } from 'react'
@@ -36,6 +36,7 @@ export const Route = createFileRoute('/admin/machines')({
 })
 
 function AdminMachinesPage() {
+  const childMatches = useChildMatches()
   const { user, machines: initialMachines, modules } = Route.useLoaderData()
   const [machineList, setMachineList] = useState(initialMachines)
   const [showCreate, setShowCreate] = useState(false)
@@ -92,6 +93,10 @@ function AdminMachinesPage() {
     }
   }
 
+  if (childMatches.length > 0) {
+    return <Outlet />
+  }
+
   return (
     <div>
       <Header user={user} />
@@ -103,12 +108,19 @@ function AdminMachinesPage() {
             style={{ flexWrap: 'wrap', gap: '0.75rem' }}
           >
             <h1>Manage Machines</h1>
-            <button
-              className="btn btn-primary"
-              onClick={() => setShowCreate(!showCreate)}
-            >
-              {showCreate ? 'Cancel' : 'Add Machine'}
-            </button>
+            <div className="action-row">
+              {user.role === 'admin' && (
+                <Link to="/admin/training" className="btn btn-secondary">
+                  Manage Training
+                </Link>
+              )}
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowCreate(!showCreate)}
+              >
+                {showCreate ? 'Cancel' : 'Add Machine'}
+              </button>
+            </div>
           </div>
 
           {/* Create Form */}
