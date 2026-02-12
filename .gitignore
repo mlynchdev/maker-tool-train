@@ -41,3 +41,7 @@ drizzle/meta/
 
 # Docker
 *.pid
+
+# Local HTTPS certs (mkcert/dev)
+apps/web/localhost*.pem
+apps/web/certs/localhost*.pem
