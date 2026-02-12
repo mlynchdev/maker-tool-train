@@ -90,6 +90,10 @@ export function Header({ user }: HeaderProps) {
             <Link to="/admin/machines">Resources</Link>
           )}
 
+          {(user.role === 'manager' || user.role === 'admin') && (
+            <Link to="/admin/users">Users</Link>
+          )}
+
           {user.role === 'admin' && <Link to="/admin/training">Training Admin</Link>}
 
           {(user.role === 'manager' || user.role === 'admin') && (
@@ -117,6 +121,8 @@ export function Header({ user }: HeaderProps) {
               )}
             </Link>
           )}
+
+          {user.role === 'admin' && <Link to="/admin/settings">Settings</Link>}
 
           {unreadNotifications > 0 && (
             <span className="badge badge-info">{unreadNotifications} alerts</span>

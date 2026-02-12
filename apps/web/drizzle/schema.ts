@@ -10,8 +10,9 @@ import {
   timestamp,
   uniqueIndex,
   index,
+  check,
 } from 'drizzle-orm/pg-core'
-import { relations } from 'drizzle-orm'
+import { relations, sql } from 'drizzle-orm'
 
 // Enums
 export const userRoleEnum = pgEnum('user_role', ['member', 'manager', 'admin'])
@@ -52,16 +53,28 @@ export const users = pgTable('users', {
 })
 
 // Machines table
-export const machines = pgTable('machines', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: varchar('name', { length: 255 }).notNull(),
-  description: text('description'),
-  resourceType: resourceTypeEnum('resource_type').default('machine').notNull(),
-  calcomEventTypeId: integer('calcom_event_type_id'),
-  active: boolean('active').default(true).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-})
+export const machines = pgTable(
+  'machines',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 255 }).notNull(),
+    description: text('description'),
+    resourceType: resourceTypeEnum('resource_type').default('machine').notNull(),
+    calcomEventTypeId: integer('calcom_event_type_id'),
+    trainingDurationMinutes: integer('training_duration_minutes')
+      .default(30)
+      .notNull(),
+    active: boolean('active').default(true).notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    durationAllowedCheck: check(
+      'machine_training_duration_allowed_check',
+      sql`${table.trainingDurationMinutes} in (15, 30, 45, 60)`
+    ),
+  })
+)
 
 // Training modules table
 export const trainingModules = pgTable('training_modules', {
@@ -207,6 +220,51 @@ export const checkoutAvailabilityBlocks = pgTable(
   })
 )
 
+// Checkout recurring availability rules - manager/admin weekly recurring windows
+export const checkoutAvailabilityRules = pgTable(
+  'checkout_availability_rules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    managerId: uuid('manager_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    dayOfWeek: integer('day_of_week').notNull(),
+    startMinuteOfDay: integer('start_minute_of_day').notNull(),
+    endMinuteOfDay: integer('end_minute_of_day').notNull(),
+    timezone: varchar('timezone', { length: 64 }).default('UTC').notNull(),
+    notes: text('notes'),
+    active: boolean('active').default(true).notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    managerDayIdx: index('checkout_rule_manager_day_idx').on(
+      table.managerId,
+      table.dayOfWeek
+    ),
+    managerActiveIdx: index('checkout_rule_manager_active_idx').on(
+      table.managerId,
+      table.active
+    ),
+    dayOfWeekCheck: check(
+      'checkout_rule_day_of_week_check',
+      sql`${table.dayOfWeek} >= 0 and ${table.dayOfWeek} <= 6`
+    ),
+    startMinuteCheck: check(
+      'checkout_rule_start_minute_check',
+      sql`${table.startMinuteOfDay} >= 0 and ${table.startMinuteOfDay} < 1440`
+    ),
+    endMinuteCheck: check(
+      'checkout_rule_end_minute_check',
+      sql`${table.endMinuteOfDay} > 0 and ${table.endMinuteOfDay} <= 1440`
+    ),
+    rangeCheck: check(
+      'checkout_rule_range_check',
+      sql`${table.endMinuteOfDay} > ${table.startMinuteOfDay}`
+    ),
+  })
+)
+
 // Checkout appointments - member bookings against checkout availability blocks
 export const checkoutAppointments = pgTable(
   'checkout_appointments',
@@ -223,6 +281,10 @@ export const checkoutAppointments = pgTable(
       .notNull(),
     availabilityBlockId: uuid('availability_block_id').references(
       () => checkoutAvailabilityBlocks.id,
+      { onDelete: 'set null' }
+    ),
+    availabilityRuleId: uuid('availability_rule_id').references(
+      () => checkoutAvailabilityRules.id,
       { onDelete: 'set null' }
     ),
     startTime: timestamp('start_time').notNull(),
@@ -248,6 +310,7 @@ export const checkoutAppointments = pgTable(
       table.startTime
     ),
     blockIdx: index('checkout_appt_block_idx').on(table.availabilityBlockId),
+    ruleIdx: index('checkout_appt_rule_idx').on(table.availabilityRuleId),
   })
 )
 
@@ -276,6 +339,13 @@ export const notifications = pgTable(
   })
 )
 
+// App settings - global key/value configuration for a makerspace instance
+export const appSettings = pgTable('app_settings', {
+  key: varchar('key', { length: 128 }).primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+})
+
 // Sessions - for auth abstraction
 export const sessions = pgTable(
   'sessions',
@@ -302,6 +372,9 @@ export const usersRelations = relations(users, ({ many }) => ({
   reviewedReservations: many(reservations, { relationName: 'reservationReviewer' }),
   managedCheckoutAvailabilityBlocks: many(checkoutAvailabilityBlocks, {
     relationName: 'checkoutBlockManager',
+  }),
+  managedCheckoutAvailabilityRules: many(checkoutAvailabilityRules, {
+    relationName: 'checkoutRuleManager',
   }),
   checkoutAppointments: many(checkoutAppointments, {
     relationName: 'checkoutAppointmentUser',
@@ -397,7 +470,23 @@ export const checkoutAvailabilityBlocksRelations = relations(
       references: [users.id],
       relationName: 'checkoutBlockManager',
     }),
-    appointments: many(checkoutAppointments),
+    appointments: many(checkoutAppointments, {
+      relationName: 'appointmentBlock',
+    }),
+  })
+)
+
+export const checkoutAvailabilityRulesRelations = relations(
+  checkoutAvailabilityRules,
+  ({ one, many }) => ({
+    manager: one(users, {
+      fields: [checkoutAvailabilityRules.managerId],
+      references: [users.id],
+      relationName: 'checkoutRuleManager',
+    }),
+    appointments: many(checkoutAppointments, {
+      relationName: 'appointmentRule',
+    }),
   })
 )
 
@@ -419,6 +508,12 @@ export const checkoutAppointmentsRelations = relations(checkoutAppointments, ({ 
   availabilityBlock: one(checkoutAvailabilityBlocks, {
     fields: [checkoutAppointments.availabilityBlockId],
     references: [checkoutAvailabilityBlocks.id],
+    relationName: 'appointmentBlock',
+  }),
+  availabilityRule: one(checkoutAvailabilityRules, {
+    fields: [checkoutAppointments.availabilityRuleId],
+    references: [checkoutAvailabilityRules.id],
+    relationName: 'appointmentRule',
   }),
 }))
 
@@ -428,6 +523,8 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
     references: [users.id],
   }),
 }))
+
+export const appSettingsRelations = relations(appSettings, () => ({}))
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
   user: one(users, {
@@ -450,8 +547,12 @@ export type Reservation = typeof reservations.$inferSelect
 export type NewReservation = typeof reservations.$inferInsert
 export type CheckoutAvailabilityBlock = typeof checkoutAvailabilityBlocks.$inferSelect
 export type NewCheckoutAvailabilityBlock = typeof checkoutAvailabilityBlocks.$inferInsert
+export type CheckoutAvailabilityRule = typeof checkoutAvailabilityRules.$inferSelect
+export type NewCheckoutAvailabilityRule = typeof checkoutAvailabilityRules.$inferInsert
 export type CheckoutAppointment = typeof checkoutAppointments.$inferSelect
 export type NewCheckoutAppointment = typeof checkoutAppointments.$inferInsert
 export type Notification = typeof notifications.$inferSelect
 export type NewNotification = typeof notifications.$inferInsert
+export type AppSetting = typeof appSettings.$inferSelect
+export type NewAppSetting = typeof appSettings.$inferInsert
 export type Session = typeof sessions.$inferSelect

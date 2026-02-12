@@ -8,7 +8,7 @@ import { getMachineBookingsInRange } from '../services/booking-conflicts'
 import { createBookingRequest } from '../services/booking-workflow'
 import {
   bookCheckoutAppointment,
-  getAvailableCheckoutBlocks,
+  getAvailableCheckoutSlots,
 } from '../services/checkout-scheduling'
 
 export const getMachines = createServerFn({ method: 'GET' }).handler(async () => {
@@ -83,7 +83,7 @@ export const getMachineAvailability = createServerFn({ method: 'GET' })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    await requireAuth()
+    const user = await requireAuth()
 
     const machine = await db.query.machines.findFirst({
       where: eq(machines.id, data.machineId),
@@ -146,7 +146,7 @@ export const getMachineCheckoutAvailability = createServerFn({ method: 'GET' })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    await requireAuth()
+    const user = await requireAuth()
 
     const machine = await db.query.machines.findFirst({
       where: eq(machines.id, data.machineId),
@@ -164,21 +164,23 @@ export const getMachineCheckoutAvailability = createServerFn({ method: 'GET' })
       ? new Date(data.endDate)
       : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
 
-    const blocks = await getAvailableCheckoutBlocks({
+    const slots = await getAvailableCheckoutSlots({
       machineId: data.machineId,
+      userId: user.id,
       startTime,
       endTime,
     })
 
     return {
-      blocks: blocks.map((block) => ({
-        id: block.id,
-        managerId: block.managerId,
-        managerName: block.manager.name || block.manager.email,
-        startTime: block.startTime,
-        endTime: block.endTime,
-        notes: block.notes,
+      slots: slots.map((slot) => ({
+        ruleId: slot.ruleId,
+        managerId: slot.managerId,
+        managerName: slot.manager.name || slot.manager.email,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        notes: slot.notes,
       })),
+      trainingDurationMinutes: machine.trainingDurationMinutes,
     }
   })
 
@@ -187,7 +189,8 @@ export const requestCheckoutAppointment = createServerFn({ method: 'POST' })
     z
       .object({
         machineId: z.string().uuid(),
-        blockId: z.string().uuid(),
+        managerId: z.string().uuid(),
+        slotStartTime: z.string().datetime(),
         notes: z.string().optional(),
       })
       .parse(data)
@@ -198,7 +201,8 @@ export const requestCheckoutAppointment = createServerFn({ method: 'POST' })
     return bookCheckoutAppointment({
       userId: user.id,
       machineId: data.machineId,
-      blockId: data.blockId,
+      managerId: data.managerId,
+      slotStartTime: new Date(data.slotStartTime),
       notes: data.notes,
     })
   })

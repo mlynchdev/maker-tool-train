@@ -237,3 +237,29 @@ export async function notifyUserCheckoutAppointmentBooked(input: {
     },
   })
 }
+
+export async function notifyUserCheckoutAppointmentCancelled(input: {
+  userId: string
+  managerName: string
+  machineName: string
+  machineId: string
+  appointmentId: string
+  startTimeIso: string
+  endTimeIso: string
+  reason?: string
+}) {
+  const reasonSuffix = input.reason ? ` Reason: ${input.reason}.` : ''
+
+  return createNotification({
+    userId: input.userId,
+    type: 'checkout_appointment_cancelled',
+    title: 'Checkout appointment cancelled',
+    message: `${input.managerName} cancelled your checkout appointment for ${input.machineName} (${new Date(
+      input.startTimeIso
+    ).toLocaleString()} - ${new Date(input.endTimeIso).toLocaleString()}).${reasonSuffix}`,
+    metadata: {
+      appointmentId: input.appointmentId,
+      machineId: input.machineId,
+    },
+  })
+}

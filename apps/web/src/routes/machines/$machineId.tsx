@@ -6,7 +6,8 @@ import { requireAuth } from '~/server/auth/middleware'
 import { db, machines } from '~/lib/db'
 import { checkEligibility, getMachineRequirements } from '~/server/services/eligibility'
 import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
-import { getAvailableCheckoutBlocks } from '~/server/services/checkout-scheduling'
+import { getAvailableCheckoutSlots } from '~/server/services/checkout-scheduling'
+import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
 import { Header } from '~/components/Header'
 import { requestCheckoutAppointment } from '~/server/api/machines'
 
@@ -33,10 +34,11 @@ const getMachineData = createServerFn({ method: 'GET' })
     const bookingRangeEnd = new Date(rangeStart)
     bookingRangeEnd.setDate(bookingRangeEnd.getDate() + 14)
 
-    const availableCheckoutBlocks =
+    const availableCheckoutSlots =
       trainingComplete && !eligibility.hasCheckout
-        ? await getAvailableCheckoutBlocks({
+        ? await getAvailableCheckoutSlots({
             machineId: data.machineId,
+            userId: user.id,
             startTime: rangeStart,
             endTime: rangeEnd,
           })
@@ -51,10 +53,11 @@ const getMachineData = createServerFn({ method: 'GET' })
     return {
       user,
       machine,
+      makerspaceTimezone: await getMakerspaceTimezone(),
       eligibility,
       requirements,
       trainingComplete,
-      availableCheckoutBlocks,
+      availableCheckoutSlots,
       upcomingBookings,
     }
   })
@@ -70,15 +73,16 @@ function MachineDetailPage() {
   const {
     user,
     machine,
+    makerspaceTimezone,
     eligibility,
     requirements,
     trainingComplete,
-    availableCheckoutBlocks,
+    availableCheckoutSlots,
     upcomingBookings,
   } = Route.useLoaderData()
   const childMatches = useChildMatches()
-  const [checkoutBlocks, setCheckoutBlocks] = useState(availableCheckoutBlocks)
-  const [bookingBlockId, setBookingBlockId] = useState<string | null>(null)
+  const [checkoutSlots, setCheckoutSlots] = useState(availableCheckoutSlots)
+  const [bookingSlotKey, setBookingSlotKey] = useState<string | null>(null)
   const [checkoutMessage, setCheckoutMessage] = useState('')
 
   if (childMatches.length > 0) {
@@ -93,7 +97,13 @@ function MachineDetailPage() {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
+      timeZone: makerspaceTimezone,
     })
+
+  const trainingDurationLabel =
+    machine.trainingDurationMinutes === 60
+      ? '1 hour'
+      : `${machine.trainingDurationMinutes} minutes`
 
   const getReservationStatusBadgeClass = (status: string) => {
     if (status === 'approved' || status === 'confirmed') return 'badge-success'
@@ -102,15 +112,23 @@ function MachineDetailPage() {
     return 'badge-info'
   }
 
-  const handleBookCheckout = async (blockId: string) => {
-    setBookingBlockId(blockId)
+  const managerCheckoutReason = 'Manager checkout not approved'
+  const outstandingEligibilityReasons =
+    trainingComplete && !eligibility.hasCheckout
+      ? eligibility.reasons.filter((reason) => reason !== managerCheckoutReason)
+      : eligibility.reasons
+
+  const handleBookCheckout = async (managerId: string, slotStartTime: Date) => {
+    const slotKey = `${managerId}-${slotStartTime.toISOString()}`
+    setBookingSlotKey(slotKey)
     setCheckoutMessage('')
 
     try {
       const result = await requestCheckoutAppointment({
         data: {
           machineId: machine.id,
-          blockId,
+          managerId,
+          slotStartTime: slotStartTime.toISOString(),
         },
       })
 
@@ -118,14 +136,22 @@ function MachineDetailPage() {
         setCheckoutMessage(
           'Checkout appointment booked. A manager/admin will meet you during that slot.'
         )
-        setCheckoutBlocks((prev) => prev.filter((block) => block.id !== blockId))
+        setCheckoutSlots((prev) =>
+          prev.filter(
+            (slot) =>
+              !(
+                slot.managerId === managerId &&
+                new Date(slot.startTime).getTime() === slotStartTime.getTime()
+              )
+          )
+        )
       } else {
         setCheckoutMessage(result.error || 'Unable to book checkout appointment')
       }
     } catch {
       setCheckoutMessage('Unable to book checkout appointment')
     } finally {
-      setBookingBlockId(null)
+      setBookingSlotKey(null)
     }
   }
 
@@ -218,17 +244,25 @@ function MachineDetailPage() {
                 </div>
               ) : (
                 <div>
-                  <p className="text-small text-muted mb-2">
-                    Complete the following to become eligible:
-                  </p>
-                  <ul className="eligibility-list">
-                    {eligibility.reasons.map((reason, i) => (
-                      <li key={i} className="eligibility-item">
-                        <span className="eligibility-icon incomplete">!</span>
-                        <span className="text-small">{reason}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {outstandingEligibilityReasons.length > 0 ? (
+                    <>
+                      <p className="text-small text-muted mb-2">
+                        Complete the following to become eligible:
+                      </p>
+                      <ul className="eligibility-list">
+                        {outstandingEligibilityReasons.map((reason, i) => (
+                          <li key={i} className="eligibility-item">
+                            <span className="eligibility-icon incomplete">!</span>
+                            <span className="text-small">{reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="text-small text-muted mb-2">
+                      Training is complete. Schedule your final in-person checkout below.
+                    </p>
+                  )}
 
                   {eligibility.requirements.some((r) => !r.completed) && (
                     <Link to="/training" className="btn btn-secondary mt-2">
@@ -239,44 +273,57 @@ function MachineDetailPage() {
                   {trainingComplete && !eligibility.hasCheckout && (
                     <div className="mt-2">
                       <p className="text-small text-muted mb-1">
-                        Training is complete. Book an in-person checkout slot to unlock
-                        reservations.
+                        Request your final in-person checkout slot. A manager/admin will
+                        approve your checkout after this appointment.
+                      </p>
+                      <p className="text-small text-muted mb-1">
+                        Times shown in <strong>{makerspaceTimezone}</strong>. Appointment duration is{' '}
+                        <strong>{trainingDurationLabel}</strong>.
                       </p>
 
                       {checkoutMessage && (
                         <div className="alert alert-info mb-2">{checkoutMessage}</div>
                       )}
 
-                      {checkoutBlocks.length > 0 ? (
+                      {checkoutSlots.length > 0 ? (
                         <div className="table-wrapper">
                           <table className="table">
                             <thead>
                               <tr>
                                 <th>Start</th>
-                                <th>End</th>
+                                <th>Duration</th>
                                 <th>With</th>
                                 <th>Action</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {checkoutBlocks.map((block) => (
-                                <tr key={block.id}>
-                                  <td>{formatDateTime(block.startTime)}</td>
-                                  <td>{formatDateTime(block.endTime)}</td>
-                                  <td>{block.manager.name || block.manager.email}</td>
-                                  <td>
-                                    <button
-                                      className="btn btn-primary"
-                                      onClick={() => handleBookCheckout(block.id)}
-                                      disabled={bookingBlockId === block.id}
-                                    >
-                                      {bookingBlockId === block.id
-                                        ? 'Booking...'
-                                        : 'Book Checkout'}
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
+                              {checkoutSlots.map((slot) => {
+                                const slotKey = `${slot.managerId}-${new Date(slot.startTime).toISOString()}`
+
+                                return (
+                                  <tr key={slotKey}>
+                                    <td>{formatDateTime(slot.startTime)}</td>
+                                    <td>{trainingDurationLabel}</td>
+                                    <td>{slot.manager.name || slot.manager.email}</td>
+                                    <td>
+                                      <button
+                                        className="btn btn-primary"
+                                        onClick={() =>
+                                          handleBookCheckout(
+                                            slot.managerId,
+                                            new Date(slot.startTime)
+                                          )
+                                        }
+                                        disabled={bookingSlotKey === slotKey}
+                                      >
+                                        {bookingSlotKey === slotKey
+                                          ? 'Booking...'
+                                          : 'Book Checkout'}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                )
+                              })}
                             </tbody>
                           </table>
                         </div>
