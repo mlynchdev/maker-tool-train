@@ -100,6 +100,7 @@ import {
   cancelFutureCheckoutAppointmentsForUserMachine,
   cancelCheckoutAppointmentByManager,
   createCheckoutAvailabilityBlock,
+  deactivateCheckoutAvailabilityBlock,
 } from './checkout-scheduling'
 import {
   notifyManagerCheckoutAppointmentBooked,
@@ -149,8 +150,6 @@ function mockSuccessfulBookingTransaction(
 
 describe('checkout-scheduling service', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-
     mocks.getMakerspaceTimezone.mockResolvedValue('America/Los_Angeles')
     mocks.db.query.managerCheckouts.findFirst.mockResolvedValue(null)
     mocks.checkEligibility.mockResolvedValue({
@@ -630,6 +629,72 @@ describe('checkout-scheduling service', () => {
     expect(result).toEqual({
       success: false,
       error: 'Only future appointments can be cancelled',
+    })
+  })
+
+  it('deactivates an existing availability rule', async () => {
+    mocks.db.query.checkoutAvailabilityRules.findFirst.mockResolvedValue({
+      id: 'rule-1',
+      managerId: 'manager-1',
+      active: true,
+    })
+    const deactivatedRule = {
+      id: 'rule-1',
+      managerId: 'manager-1',
+      active: false,
+    }
+    mockUpdateReturning(deactivatedRule)
+
+    const result = await deactivateCheckoutAvailabilityBlock({
+      ruleId: 'rule-1',
+      managerId: 'manager-1',
+    })
+
+    expect(result).toEqual({
+      success: true,
+      data: deactivatedRule,
+    })
+  })
+
+  it('returns not found when deactivating a nonexistent rule', async () => {
+    mocks.db.query.checkoutAvailabilityRules.findFirst.mockResolvedValue(null)
+
+    const result = await deactivateCheckoutAvailabilityBlock({
+      ruleId: 'nonexistent',
+      managerId: 'manager-1',
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Availability rule not found',
+    })
+  })
+
+  it('rejects availability block with invalid day of week', async () => {
+    const result = await createCheckoutAvailabilityBlock({
+      managerId: 'manager-1',
+      dayOfWeek: 7,
+      startMinuteOfDay: 8 * 60,
+      endMinuteOfDay: 10 * 60,
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Invalid day of week',
+    })
+  })
+
+  it('rejects availability block with end time before start time', async () => {
+    const result = await createCheckoutAvailabilityBlock({
+      managerId: 'manager-1',
+      dayOfWeek: 3,
+      startMinuteOfDay: 16 * 60,
+      endMinuteOfDay: 10 * 60,
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'End time must be after start time',
     })
   })
 })

@@ -47,8 +47,6 @@ import { checkEligibility } from './eligibility'
 
 describe('eligibility service', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-
     mocks.db.query.machineRequirements.findMany.mockResolvedValue([])
     mocks.db.query.trainingProgress.findFirst.mockResolvedValue(null)
   })
@@ -138,5 +136,146 @@ describe('eligibility service', () => {
     expect(result.reasons).toContain(
       'Training "Safety Fundamentals" not completed (50% of 90% required)'
     )
+  })
+
+  it('returns early when user is not found', async () => {
+    mocks.db.query.users.findFirst.mockResolvedValue(null)
+
+    const result = await checkEligibility('nonexistent', 'machine-1')
+
+    expect(result).toEqual({
+      eligible: false,
+      reasons: ['User not found'],
+      requirements: [],
+      hasCheckout: false,
+    })
+    expect(mocks.db.query.machines.findFirst).not.toHaveBeenCalled()
+  })
+
+  it('returns early when machine is not found', async () => {
+    mocks.db.query.users.findFirst.mockResolvedValue({
+      id: 'member-1',
+      role: 'member',
+      status: 'active',
+    })
+    mocks.db.query.machines.findFirst.mockResolvedValue(null)
+
+    const result = await checkEligibility('member-1', 'nonexistent')
+
+    expect(result).toEqual({
+      eligible: false,
+      reasons: ['Machine not found'],
+      requirements: [],
+      hasCheckout: false,
+    })
+    expect(mocks.db.query.machineRequirements.findMany).not.toHaveBeenCalled()
+  })
+
+  it('rejects inactive users', async () => {
+    mocks.db.query.users.findFirst.mockResolvedValue({
+      id: 'member-1',
+      role: 'member',
+      status: 'suspended',
+    })
+    mocks.db.query.machines.findFirst.mockResolvedValue({
+      id: 'machine-1',
+      active: true,
+    })
+    mocks.db.query.managerCheckouts.findFirst.mockResolvedValue({
+      id: 'checkout-1',
+    })
+
+    const result = await checkEligibility('member-1', 'machine-1')
+
+    expect(result.eligible).toBe(false)
+    expect(result.reasons).toContain('User account is not active')
+  })
+
+  it('treats training at exactly the threshold as completed', async () => {
+    mocks.db.query.users.findFirst.mockResolvedValue({
+      id: 'member-1',
+      role: 'member',
+      status: 'active',
+    })
+    mocks.db.query.machines.findFirst.mockResolvedValue({
+      id: 'machine-1',
+      active: true,
+    })
+    mocks.db.query.machineRequirements.findMany.mockResolvedValue([
+      {
+        moduleId: 'module-1',
+        requiredWatchPercent: 90,
+        module: {
+          id: 'module-1',
+          title: 'Safety Fundamentals',
+          durationSeconds: 100,
+        },
+      },
+    ])
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      watchedSeconds: 90,
+    })
+    mocks.db.query.managerCheckouts.findFirst.mockResolvedValue({
+      id: 'checkout-1',
+    })
+
+    const result = await checkEligibility('member-1', 'machine-1')
+
+    expect(result.eligible).toBe(true)
+    expect(result.requirements).toEqual([
+      {
+        moduleId: 'module-1',
+        moduleTitle: 'Safety Fundamentals',
+        requiredPercent: 90,
+        watchedPercent: 90,
+        completed: true,
+      },
+    ])
+  })
+
+  it('returns eligible when all training is done and checkout exists', async () => {
+    mocks.db.query.users.findFirst.mockResolvedValue({
+      id: 'member-1',
+      role: 'member',
+      status: 'active',
+    })
+    mocks.db.query.machines.findFirst.mockResolvedValue({
+      id: 'machine-1',
+      active: true,
+    })
+    mocks.db.query.machineRequirements.findMany.mockResolvedValue([
+      {
+        moduleId: 'module-1',
+        requiredWatchPercent: 90,
+        module: {
+          id: 'module-1',
+          title: 'Safety Fundamentals',
+          durationSeconds: 100,
+        },
+      },
+    ])
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      watchedSeconds: 95,
+    })
+    mocks.db.query.managerCheckouts.findFirst.mockResolvedValue({
+      id: 'checkout-1',
+    })
+
+    const result = await checkEligibility('member-1', 'machine-1')
+
+    expect(result).toEqual({
+      eligible: true,
+      reasons: [],
+      requirements: [
+        {
+          moduleId: 'module-1',
+          moduleTitle: 'Safety Fundamentals',
+          requiredPercent: 90,
+          watchedPercent: 95,
+          completed: true,
+        },
+      ],
+      hasCheckout: true,
+    })
   })
 })
