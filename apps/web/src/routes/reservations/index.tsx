@@ -5,15 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Header } from '~/components/Header'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { db, reservations } from '~/lib/db'
 import { parseSSEMessage } from '~/lib/sse'
 import { requireAuth } from '~/server/auth/middleware'
@@ -87,7 +79,7 @@ function ReservationsPage() {
       } else {
         alert(result.error || 'Failed to cancel reservation')
       }
-    } catch (error) {
+    } catch {
       alert('An error occurred')
     } finally {
       setCancelling(null)
@@ -122,43 +114,73 @@ function ReservationsPage() {
     (reservation) => activeStatuses.includes(reservation.status) && new Date(reservation.startTime) > new Date()
   )
 
-  const pastReservations = reservationsList.filter(
+  const historyReservations = reservationsList.filter(
     (reservation) => !activeStatuses.includes(reservation.status) || new Date(reservation.startTime) <= new Date()
   )
+
+  const cancelledCount = reservationsList.filter((reservation) => reservation.status === 'cancelled').length
 
   return (
     <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="container py-8">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight">My Reservations</h1>
+      <main className="container space-y-8 py-6 md:py-8">
+        <section className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">My Reservations</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Upcoming and historical bookings are separated for quicker access.
+            </p>
+          </div>
           <Button asChild>
-            <Link to="/machines">New Reservation</Link>
+            <Link to="/machines">New reservation</Link>
           </Button>
-        </div>
+        </section>
 
-        <section className="mb-8">
-          <h2 className="mb-3 text-xl font-semibold tracking-tight">Upcoming</h2>
+        <section className="grid gap-4 sm:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Upcoming</CardDescription>
+              <CardTitle className="text-2xl">{upcomingReservations.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>History</CardDescription>
+              <CardTitle className="text-2xl">{historyReservations.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Cancelled</CardDescription>
+              <CardTitle className="text-2xl">{cancelledCount}</CardTitle>
+            </CardHeader>
+          </Card>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Upcoming</h2>
+            <Badge variant="info">{upcomingReservations.length}</Badge>
+          </div>
+
           {upcomingReservations.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2">
               {upcomingReservations.map((reservation) => (
                 <Card key={reservation.id}>
-                  <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-3">
-                    <CardTitle className="text-lg">{reservation.machine.name}</CardTitle>
-                    <Badge variant={getStatusVariant(reservation.status)} className="capitalize">
-                      {reservation.status}
-                    </Badge>
+                  <CardHeader className="space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <CardTitle className="text-lg">{reservation.machine.name}</CardTitle>
+                      <Badge variant={getStatusVariant(reservation.status)} className="capitalize">
+                        {reservation.status}
+                      </Badge>
+                    </div>
+                    <CardDescription>
+                      {formatDateTime(reservation.startTime)} to {formatDateTime(reservation.endTime)}
+                    </CardDescription>
                   </CardHeader>
 
                   <CardContent>
-                    <p className="mb-1 text-sm">
-                      <span className="font-medium">Start:</span> {formatDateTime(reservation.startTime)}
-                    </p>
-                    <p className="mb-4 text-sm">
-                      <span className="font-medium">End:</span> {formatDateTime(reservation.endTime)}
-                    </p>
-
                     {(reservation.status === 'pending' ||
                       reservation.status === 'approved' ||
                       reservation.status === 'confirmed') && (
@@ -167,7 +189,7 @@ function ReservationsPage() {
                         onClick={() => handleCancel(reservation.id)}
                         disabled={cancelling === reservation.id}
                       >
-                        {cancelling === reservation.id ? 'Cancelling...' : 'Cancel'}
+                        {cancelling === reservation.id ? 'Cancelling...' : 'Cancel reservation'}
                       </Button>
                     )}
                   </CardContent>
@@ -179,42 +201,34 @@ function ReservationsPage() {
               <CardContent className="py-8 text-center">
                 <p className="text-muted-foreground">No upcoming reservations.</p>
                 <Button asChild className="mt-4">
-                  <Link to="/machines">Browse Machines</Link>
+                  <Link to="/machines">Browse machines</Link>
                 </Button>
               </CardContent>
             </Card>
           )}
         </section>
 
-        {pastReservations.length > 0 && (
+        {historyReservations.length > 0 && (
           <section>
-            <h2 className="mb-3 text-xl font-semibold tracking-tight">Past & Cancelled</h2>
-            <Card>
-              <CardContent className="pt-6">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Machine</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pastReservations.map((reservation) => (
-                      <TableRow key={reservation.id}>
-                        <TableCell className="font-medium">{reservation.machine.name}</TableCell>
-                        <TableCell>{formatDateTime(reservation.startTime)}</TableCell>
-                        <TableCell>
-                          <Badge variant={getStatusVariant(reservation.status)} className="capitalize">
-                            {reservation.status}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+            <div className="mb-3 flex items-center gap-2">
+              <h2 className="text-xl font-semibold tracking-tight">Past and cancelled</h2>
+              <Badge variant="secondary">{historyReservations.length}</Badge>
+            </div>
+            <div className="grid gap-3">
+              {historyReservations.map((reservation) => (
+                <Card key={reservation.id}>
+                  <CardContent className="flex flex-col gap-2 pt-6 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="font-medium">{reservation.machine.name}</p>
+                      <p className="text-sm text-muted-foreground">{formatDateTime(reservation.startTime)}</p>
+                    </div>
+                    <Badge variant={getStatusVariant(reservation.status)} className="w-fit capitalize">
+                      {reservation.status}
+                    </Badge>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </section>
         )}
       </main>

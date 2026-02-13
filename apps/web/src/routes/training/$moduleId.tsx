@@ -5,10 +5,15 @@ import { useCallback, useRef, useState } from 'react'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
 import { normalizeYouTubeId } from '~/lib/youtube'
-import { getModuleProgress, updateTrainingProgress } from '~/server/services/training'
+import { getModuleProgress } from '~/server/services/training'
 import { Header } from '~/components/Header'
 import { YouTubePlayer } from '~/components/YouTubePlayer'
 import { updateProgress } from '~/server/api/training'
+import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
+import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
+import { Progress } from '~/components/ui/progress'
 
 const getModuleData = createServerFn({ method: 'GET' })
   .inputValidator((data: { moduleId: string }) => data)
@@ -53,14 +58,23 @@ function TrainingModulePage() {
   const [currentProgress, setCurrentProgress] = useState(progress?.percentComplete || 0)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
-  const pendingRef = useRef<{ watchedSeconds: number; currentPosition: number; sessionDuration: number; videoDuration: number } | null>(null)
+  const pendingRef = useRef<{
+    watchedSeconds: number
+    currentPosition: number
+    sessionDuration: number
+    videoDuration: number
+  } | null>(null)
 
   const saveProgress = useCallback(
-    async (watchedSeconds: number, currentPosition: number, sessionDuration: number, videoDuration: number) => {
+    async (
+      watchedSeconds: number,
+      currentPosition: number,
+      sessionDuration: number,
+      videoDuration: number
+    ) => {
       savingRef.current = true
       setSaving(true)
 
-      // Always update the local display from client-tracked watchedSeconds
       const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
       const localPercent = Math.min(Math.floor((watchedSeconds / displayDuration) * 100), 100)
       setCurrentProgress(localPercent)
@@ -77,7 +91,6 @@ function TrainingModulePage() {
         })
 
         if (result.success && 'percentComplete' in result) {
-          // Prefer server-accepted value (may differ from local if server capped it)
           setCurrentProgress(result.percentComplete)
         } else if (!result.success) {
           console.warn('Progress update rejected:', result.error)
@@ -89,20 +102,28 @@ function TrainingModulePage() {
         setSaving(false)
       }
 
-      // Flush any queued update (e.g. final report on video end)
       const pending = pendingRef.current
       if (pending) {
         pendingRef.current = null
-        await saveProgress(pending.watchedSeconds, pending.currentPosition, pending.sessionDuration, pending.videoDuration)
+        await saveProgress(
+          pending.watchedSeconds,
+          pending.currentPosition,
+          pending.sessionDuration,
+          pending.videoDuration
+        )
       }
     },
     [module.id, module.durationSeconds]
   )
 
   const handleProgress = useCallback(
-    async (watchedSeconds: number, currentPosition: number, sessionDuration: number, videoDuration: number) => {
+    async (
+      watchedSeconds: number,
+      currentPosition: number,
+      sessionDuration: number,
+      videoDuration: number
+    ) => {
       if (savingRef.current) {
-        // Queue latest values — only the most recent matters
         pendingRef.current = { watchedSeconds, currentPosition, sessionDuration, videoDuration }
         return
       }
@@ -112,31 +133,34 @@ function TrainingModulePage() {
   )
 
   return (
-    <div>
+    <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="main">
-        <div className="container">
-          <div className="mb-2">
-            <Link to="/training" className="text-small">
-              &larr; Back to Training
-            </Link>
-          </div>
+      <main className="container space-y-6 py-6 md:py-8">
+        <Button asChild variant="ghost" className="w-fit px-0">
+          <Link to="/training">&larr; Back to Training</Link>
+        </Button>
 
-          <div className="flex flex-between flex-center mb-2">
-            <h1>{module.title}</h1>
-            {currentProgress >= 90 ? (
-              <span className="badge badge-success">Complete</span>
-            ) : (
-              <span className="badge badge-warning">{currentProgress}%</span>
+        <section className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">{module.title}</h1>
+            {module.description && (
+              <p className="mt-1 text-sm text-muted-foreground">{module.description}</p>
             )}
           </div>
-
-          {module.description && (
-            <p className="text-muted mb-2">{module.description}</p>
+          {currentProgress >= 90 ? (
+            <Badge variant="success">Complete</Badge>
+          ) : (
+            <Badge variant="warning">{currentProgress}% complete</Badge>
           )}
+        </section>
 
-          <div className="card mb-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Video Training</CardTitle>
+            <CardDescription>Progress is auto-saved while you watch.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
             {hasValidVideoId ? (
               <YouTubePlayer
                 videoId={module.youtubeVideoId}
@@ -145,36 +169,42 @@ function TrainingModulePage() {
                 initialWatchedSeconds={progress?.watchedSeconds || 0}
               />
             ) : (
-              <div className="alert alert-warning">
-                This training video is misconfigured. Ask an admin to update the YouTube URL/ID.
-              </div>
+              <Alert variant="destructive">
+                <AlertTitle>Video configuration issue</AlertTitle>
+                <AlertDescription>
+                  This module has an invalid YouTube URL or ID. Ask an admin to update it.
+                </AlertDescription>
+              </Alert>
             )}
 
-            <div className="flex flex-between flex-center mb-1">
-              <span className="text-small text-muted">
-                {saving ? 'Saving progress...' : 'Progress auto-saved'}
-              </span>
-              <span className="text-small">{currentProgress}%</span>
-            </div>
-            <div className="progress">
-              <div
-                className={`progress-bar ${currentProgress >= 90 ? 'complete' : ''}`}
-                style={{ width: `${currentProgress}%` }}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">
+                  {saving ? 'Saving progress...' : 'Progress auto-saved'}
+                </span>
+                <span className="font-medium">{currentProgress}%</span>
+              </div>
+              <Progress
+                value={currentProgress}
+                indicatorClassName={currentProgress >= 90 ? 'bg-emerald-500' : ''}
               />
             </div>
-          </div>
+          </CardContent>
+        </Card>
 
-          <div className="card">
-            <h3 className="card-title mb-1">Training Requirements</h3>
-            <p className="text-small text-muted">
-              Watch at least 90% of this video to complete the training module.
-              Your progress is automatically tracked as you watch.
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Completion Requirement</CardTitle>
+            <CardDescription>
+              Watch at least 90% to complete this module and unlock required machine steps.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Estimated duration: {Math.floor(module.durationSeconds / 60)} minutes.
             </p>
-            <p className="text-small text-muted mt-1">
-              Video duration: {Math.floor(module.durationSeconds / 60)} minutes
-            </p>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </main>
     </div>
   )

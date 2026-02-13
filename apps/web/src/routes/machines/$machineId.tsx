@@ -10,6 +10,10 @@ import { getAvailableCheckoutSlots } from '~/server/services/checkout-scheduling
 import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
 import { Header } from '~/components/Header'
 import { requestCheckoutAppointment } from '~/server/api/machines'
+import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
+import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 
 const getMachineData = createServerFn({ method: 'GET' })
   .inputValidator((data: { machineId: string }) => data)
@@ -105,11 +109,13 @@ function MachineDetailPage() {
       ? '1 hour'
       : `${machine.trainingDurationMinutes} minutes`
 
-  const getReservationStatusBadgeClass = (status: string) => {
-    if (status === 'approved' || status === 'confirmed') return 'badge-success'
-    if (status === 'pending') return 'badge-warning'
-    if (status === 'cancelled' || status === 'rejected') return 'badge-danger'
-    return 'badge-info'
+  const getReservationStatusVariant = (
+    status: string
+  ): 'success' | 'warning' | 'destructive' | 'info' => {
+    if (status === 'approved' || status === 'confirmed') return 'success'
+    if (status === 'pending') return 'warning'
+    if (status === 'cancelled' || status === 'rejected') return 'destructive'
+    return 'info'
   }
 
   const managerCheckoutReason = 'Manager checkout not approved'
@@ -156,266 +162,241 @@ function MachineDetailPage() {
   }
 
   return (
-    <div>
+    <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="main">
-        <div className="container">
-          <div className="mb-2">
-            <Link to="/machines" className="text-small">
-              &larr; Back to Machines
-            </Link>
-          </div>
+      <main className="container space-y-6 py-6 md:py-8">
+        <Button asChild variant="ghost" className="w-fit px-0">
+          <Link to="/machines">&larr; Back to Machines</Link>
+        </Button>
 
-          <div className="flex flex-between flex-center mb-2">
-            <h1>{machine.name}</h1>
-            {eligibility.eligible ? (
-              <span className="badge badge-success">Eligible</span>
-            ) : (
-              <span className="badge badge-warning">Not Eligible</span>
+        <section className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">{machine.name}</h1>
+            {machine.description && (
+              <p className="mt-1 text-sm text-muted-foreground">{machine.description}</p>
             )}
           </div>
-
-          {machine.description && (
-            <p className="text-muted mb-3">{machine.description}</p>
+          {eligibility.eligible ? (
+            <Badge variant="success">Eligible</Badge>
+          ) : (
+            <Badge variant="warning">Not eligible</Badge>
           )}
+        </section>
 
-          <div className="grid grid-2">
-            {/* Eligibility Status */}
-            <div className="card">
-              <h3 className="card-title mb-2">Eligibility Checklist</h3>
-
-              {/* Training Requirements */}
-              <h4 className="text-small mb-1">Training Requirements</h4>
-              {eligibility.requirements.length > 0 ? (
-                <ul className="eligibility-list">
-                  {eligibility.requirements.map((req) => (
-                    <li key={req.moduleId} className="eligibility-item">
-                      <span
-                        className={`eligibility-icon ${req.completed ? 'complete' : 'incomplete'}`}
+        <section className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Eligibility checklist</CardTitle>
+              <CardDescription>Complete each requirement to unlock reservations.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <p className="mb-2 text-sm font-medium">Training requirements</p>
+                {eligibility.requirements.length > 0 ? (
+                  <ul className="space-y-2">
+                    {eligibility.requirements.map((req) => (
+                      <li
+                        key={req.moduleId}
+                        className="flex items-start justify-between gap-3 rounded-lg border p-3"
                       >
-                        {req.completed ? '✓' : '!'}
-                      </span>
-                      <div>
-                        <span className="text-small">{req.moduleTitle}</span>
-                        <span className="text-small text-muted" style={{ marginLeft: '0.5rem' }}>
-                          ({req.watchedPercent}% / {req.requiredPercent}%)
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-small text-muted">No training requirements.</p>
-              )}
-
-              {/* Manager Checkout */}
-              <h4 className="text-small mt-2 mb-1">Manager Checkout</h4>
-              <div className="eligibility-item">
-                <span
-                  className={`eligibility-icon ${eligibility.hasCheckout ? 'complete' : 'incomplete'}`}
-                >
-                  {eligibility.hasCheckout ? '✓' : '!'}
-                </span>
-                <span className="text-small">
-                  {eligibility.hasCheckout
-                    ? 'Approved by manager'
-                    : 'Pending manager approval'}
-                </span>
+                        <div>
+                          <p className="text-sm font-medium">{req.moduleTitle}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {req.watchedPercent}% watched / {req.requiredPercent}% required
+                          </p>
+                        </div>
+                        <Badge variant={req.completed ? 'success' : 'warning'}>
+                          {req.completed ? 'Complete' : 'Incomplete'}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No training requirements.</p>
+                )}
               </div>
-            </div>
 
-            {/* Actions */}
-            <div className="card">
-              <h3 className="card-title mb-2">Actions</h3>
-
-              {eligibility.eligible ? (
-                <div>
-                  <p className="text-small text-muted mb-2">
-                    You are eligible to reserve this machine.
-                  </p>
-                  <Link
-                    to="/machines/$machineId/reserve"
-                    params={{ machineId: machine.id }}
-                    className="btn btn-primary"
-                  >
-                    Request Reservation
-                  </Link>
-                </div>
-              ) : (
-                <div>
-                  {outstandingEligibilityReasons.length > 0 ? (
-                    <>
-                      <p className="text-small text-muted mb-2">
-                        Complete the following to become eligible:
-                      </p>
-                      <ul className="eligibility-list">
-                        {outstandingEligibilityReasons.map((reason, i) => (
-                          <li key={i} className="eligibility-item">
-                            <span className="eligibility-icon incomplete">!</span>
-                            <span className="text-small">{reason}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </>
+              <div>
+                <p className="mb-2 text-sm font-medium">Manager checkout</p>
+                <div className="rounded-lg border p-3">
+                  {eligibility.hasCheckout ? (
+                    <Badge variant="success">Approved by manager</Badge>
                   ) : (
-                    <p className="text-small text-muted mb-2">
-                      Training is complete. Schedule your final in-person checkout below.
-                    </p>
+                    <Badge variant="warning">Pending manager approval</Badge>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Actions</CardTitle>
+              <CardDescription>
+                {eligibility.eligible
+                  ? 'You can request a reservation immediately.'
+                  : 'Follow these steps to become eligible.'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {eligibility.eligible ? (
+                <Button asChild>
+                  <Link to="/machines/$machineId/reserve" params={{ machineId: machine.id }}>
+                    Request reservation
+                  </Link>
+                </Button>
+              ) : (
+                <>
+                  {outstandingEligibilityReasons.length > 0 && (
+                    <ul className="space-y-2">
+                      {outstandingEligibilityReasons.map((reason, index) => (
+                        <li key={index} className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                          {reason}
+                        </li>
+                      ))}
+                    </ul>
                   )}
 
                   {eligibility.requirements.some((r) => !r.completed) && (
-                    <Link to="/training" className="btn btn-secondary mt-2">
-                      Go to Training
-                    </Link>
+                    <Button asChild variant="outline">
+                      <Link to="/training">Go to training</Link>
+                    </Button>
                   )}
 
                   {trainingComplete && !eligibility.hasCheckout && (
-                    <div className="mt-2">
-                      <p className="text-small text-muted mb-1">
-                        Request your final in-person checkout slot. A manager/admin will
-                        approve your checkout after this appointment.
+                    <div className="space-y-3">
+                      <p className="text-sm text-muted-foreground">
+                        Training is complete. Book your final in-person checkout.
                       </p>
-                      <p className="text-small text-muted mb-1">
-                        Times shown in <strong>{makerspaceTimezone}</strong>. Appointment duration is{' '}
+                      <p className="text-sm text-muted-foreground">
+                        Times shown in <strong>{makerspaceTimezone}</strong>. Duration is{' '}
                         <strong>{trainingDurationLabel}</strong>.
                       </p>
 
                       {checkoutMessage && (
-                        <div className="alert alert-info mb-2">{checkoutMessage}</div>
+                        <Alert className="border-emerald-200 bg-emerald-50 text-emerald-900">
+                          <AlertTitle>Checkout update</AlertTitle>
+                          <AlertDescription>{checkoutMessage}</AlertDescription>
+                        </Alert>
                       )}
 
                       {checkoutSlots.length > 0 ? (
-                        <div className="table-wrapper">
-                          <table className="table">
-                            <thead>
-                              <tr>
-                                <th>Start</th>
-                                <th>Duration</th>
-                                <th>With</th>
-                                <th>Action</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {checkoutSlots.map((slot) => {
-                                const slotKey = `${slot.managerId}-${new Date(slot.startTime).toISOString()}`
+                        <div className="space-y-2">
+                          {checkoutSlots.map((slot) => {
+                            const slotKey = `${slot.managerId}-${new Date(slot.startTime).toISOString()}`
 
-                                return (
-                                  <tr key={slotKey}>
-                                    <td>{formatDateTime(slot.startTime)}</td>
-                                    <td>{trainingDurationLabel}</td>
-                                    <td>{slot.manager.name || slot.manager.email}</td>
-                                    <td>
-                                      <button
-                                        className="btn btn-primary"
-                                        onClick={() =>
-                                          handleBookCheckout(
-                                            slot.managerId,
-                                            new Date(slot.startTime)
-                                          )
-                                        }
-                                        disabled={bookingSlotKey === slotKey}
-                                      >
-                                        {bookingSlotKey === slotKey
-                                          ? 'Booking...'
-                                          : 'Book Checkout'}
-                                      </button>
-                                    </td>
-                                  </tr>
-                                )
-                              })}
-                            </tbody>
-                          </table>
+                            return (
+                              <div
+                                key={slotKey}
+                                className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <div className="text-sm">
+                                  <p>
+                                    <span className="font-medium">Start:</span>{' '}
+                                    {formatDateTime(slot.startTime)}
+                                  </p>
+                                  <p className="text-muted-foreground">
+                                    <span className="font-medium text-foreground">With:</span>{' '}
+                                    {slot.manager.name || slot.manager.email}
+                                  </p>
+                                </div>
+                                <Button
+                                  onClick={() =>
+                                    handleBookCheckout(slot.managerId, new Date(slot.startTime))
+                                  }
+                                  disabled={bookingSlotKey === slotKey}
+                                >
+                                  {bookingSlotKey === slotKey ? 'Booking...' : 'Book checkout'}
+                                </Button>
+                              </div>
+                            )
+                          })}
                         </div>
                       ) : (
-                        <p className="text-small text-muted">
-                          No checkout slots are currently available for this resource.
+                        <p className="text-sm text-muted-foreground">
+                          No checkout slots are currently available.
                         </p>
                       )}
                     </div>
                   )}
-                </div>
+                </>
               )}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
+        </section>
 
-          {/* Training Modules Required */}
-          {requirements.length > 0 && (
-            <div className="card mt-2">
-              <h3 className="card-title mb-2">Required Training Modules</h3>
-              <div className="grid grid-3">
-                {requirements.map((req) => {
-                  const status = eligibility.requirements.find(
-                    (r) => r.moduleId === req.moduleId
-                  )
-                  return (
-                    <Link
-                      key={req.moduleId}
-                      to="/training/$moduleId"
-                      params={{ moduleId: req.moduleId }}
-                      className="card"
-                      style={{
-                        textDecoration: 'none',
-                        color: 'inherit',
-                        border: status?.completed
-                          ? '1px solid #28a745'
-                          : '1px solid #e0e0e0',
-                      }}
-                    >
-                      <div className="flex flex-between flex-center">
-                        <span className="text-small">{req.module.title}</span>
+        {requirements.length > 0 && (
+          <section>
+            <h2 className="mb-3 text-xl font-semibold tracking-tight">Required training modules</h2>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {requirements.map((req) => {
+                const status = eligibility.requirements.find((r) => r.moduleId === req.moduleId)
+                return (
+                  <Link
+                    key={req.moduleId}
+                    to="/training/$moduleId"
+                    params={{ moduleId: req.moduleId }}
+                    className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Card className="h-full transition-shadow hover:shadow-md">
+                      <CardContent className="flex items-center justify-between gap-3 pt-6">
+                        <p className="text-sm font-medium">{req.module.title}</p>
                         {status?.completed ? (
-                          <span className="badge badge-success">Done</span>
+                          <Badge variant="success">Done</Badge>
                         ) : (
-                          <span className="badge badge-warning">
-                            {status?.watchedPercent || 0}%
-                          </span>
+                          <Badge variant="warning">{status?.watchedPercent || 0}%</Badge>
                         )}
-                      </div>
-                    </Link>
-                  )
-                })}
-              </div>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                )
+              })}
             </div>
-          )}
+          </section>
+        )}
 
-          <div className="card mt-2">
-            <h3 className="card-title mb-2">Upcoming Reservation Schedule (Next 14 Days)</h3>
-            {upcomingBookings.length > 0 ? (
-              <div className="table-wrapper">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Start</th>
-                      <th>End</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {upcomingBookings.map((booking) => (
-                      <tr key={booking.id}>
-                        <td>{formatDateTime(booking.startTime)}</td>
-                        <td>{formatDateTime(booking.endTime)}</td>
-                        <td>
-                          <span className={`badge ${getReservationStatusBadgeClass(booking.status)}`}>
-                            {booking.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-small text-muted">
-                No reserved blocks are scheduled in the next 14 days.
-              </p>
-            )}
-            <p className="text-small text-muted mt-1">
-              This shared schedule helps you plan project time before requesting a booking.
-            </p>
-          </div>
-        </div>
+        <section>
+          <h2 className="mb-3 text-xl font-semibold tracking-tight">Upcoming reservation schedule</h2>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Next 14 days</CardTitle>
+              <CardDescription>
+                Shared schedule helps you plan project time before requesting a booking.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {upcomingBookings.length > 0 ? (
+                <div className="space-y-2">
+                  {upcomingBookings.map((booking) => (
+                    <div
+                      key={booking.id}
+                      className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="text-sm">
+                        <p>
+                          <span className="font-medium">Start:</span>{' '}
+                          {formatDateTime(booking.startTime)}
+                        </p>
+                        <p className="text-muted-foreground">
+                          <span className="font-medium text-foreground">End:</span>{' '}
+                          {formatDateTime(booking.endTime)}
+                        </p>
+                      </div>
+                      <Badge variant={getReservationStatusVariant(booking.status)} className="w-fit capitalize">
+                        {booking.status}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No reserved blocks are scheduled in the next 14 days.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </section>
       </main>
     </div>
   )

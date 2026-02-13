@@ -14,82 +14,122 @@ export const Route = createFileRoute('/machines/')({
 function MachinesPage() {
   const { user, machines } = Route.useLoaderData()
 
-  const eligibleCount = machines.filter((machine) => machine.eligibility.eligible).length
+  const eligibleMachines = machines.filter((machine) => machine.eligibility.eligible)
+  const blockedMachines = machines.filter((machine) => !machine.eligibility.eligible)
+
+  const renderMachineCard = (machine: (typeof machines)[number]) => (
+    <Link
+      key={machine.id}
+      to="/machines/$machineId"
+      params={{ machineId: machine.id }}
+      className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Card className="h-full transition-shadow hover:shadow-md">
+        <CardHeader className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <CardTitle className="text-lg">{machine.name}</CardTitle>
+            {machine.eligibility.eligible ? (
+              <Badge variant="success">Ready</Badge>
+            ) : (
+              <Badge variant="warning">Needs steps</Badge>
+            )}
+          </div>
+          {machine.description && <CardDescription>{machine.description}</CardDescription>}
+        </CardHeader>
+
+        <CardContent className="space-y-3 pt-0">
+          {!machine.eligibility.eligible ? (
+            <div>
+              <p className="mb-2 text-sm text-muted-foreground">Next requirements:</p>
+              <ul className="space-y-2">
+                {machine.eligibility.reasons.slice(0, 2).map((reason, index) => (
+                  <li key={index} className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
+                    {reason}
+                  </li>
+                ))}
+                {machine.eligibility.reasons.length > 2 && (
+                  <li className="text-sm text-muted-foreground">
+                    +{machine.eligibility.reasons.length - 2} more requirements
+                  </li>
+                )}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Open details to review schedule and request time.</p>
+          )}
+        </CardContent>
+      </Card>
+    </Link>
+  )
 
   return (
     <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="container py-8">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <main className="container space-y-8 py-6 md:py-8">
+        <section>
           <h1 className="text-3xl font-semibold tracking-tight">Machines</h1>
-          <Badge variant="info">
-            {eligibleCount} / {machines.length} available
-          </Badge>
-        </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Resources are grouped by readiness so you can reserve quickly or tackle requirements.
+          </p>
+        </section>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          {machines.map((machine) => (
-            <Link
-              key={machine.id}
-              to="/machines/$machineId"
-              params={{ machineId: machine.id }}
-              className="block rounded-xl transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <Card className="h-full">
-                <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-3">
-                  <CardTitle className="text-lg">{machine.name}</CardTitle>
-                  {machine.eligibility.eligible ? (
-                    <Badge variant="success">Available</Badge>
-                  ) : (
-                    <Badge variant="warning">Requirements</Badge>
-                  )}
-                </CardHeader>
-
-                <CardContent className="space-y-3">
-                  {machine.description && (
-                    <CardDescription>{machine.description}</CardDescription>
-                  )}
-
-                  {!machine.eligibility.eligible && (
-                    <div>
-                      <p className="mb-2 text-sm text-muted-foreground">Missing requirements:</p>
-                      <ul className="space-y-2">
-                        {machine.eligibility.reasons.slice(0, 2).map((reason, index) => (
-                          <li key={index} className="flex items-start gap-2 text-sm">
-                            <span className="mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive/20 text-xs font-semibold text-destructive">
-                              !
-                            </span>
-                            <span>{reason}</span>
-                          </li>
-                        ))}
-                        {machine.eligibility.reasons.length > 2 && (
-                          <li className="text-sm text-muted-foreground">
-                            +{machine.eligibility.reasons.length - 2} more
-                          </li>
-                        )}
-                      </ul>
-                    </div>
-                  )}
-
-                  {machine.eligibility.eligible && (
-                    <p className="text-sm text-muted-foreground">
-                      Click to view availability and make a reservation.
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
-        </div>
-
-        {machines.length === 0 && (
-          <Card className="mt-4">
-            <CardContent className="py-8 text-center text-muted-foreground">
-              No machines available.
-            </CardContent>
+        <section className="grid gap-4 sm:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Ready to reserve</CardDescription>
+              <CardTitle className="text-2xl">{eligibleMachines.length}</CardTitle>
+            </CardHeader>
           </Card>
-        )}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Needs requirements</CardDescription>
+              <CardTitle className="text-2xl">{blockedMachines.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Total resources</CardDescription>
+              <CardTitle className="text-2xl">{machines.length}</CardTitle>
+            </CardHeader>
+          </Card>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Ready to reserve</h2>
+            <Badge variant="success">{eligibleMachines.length}</Badge>
+          </div>
+          {eligibleMachines.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {eligibleMachines.map(renderMachineCard)}
+            </div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                Complete training modules to unlock your first machine.
+              </CardContent>
+            </Card>
+          )}
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Needs requirements</h2>
+            <Badge variant="warning">{blockedMachines.length}</Badge>
+          </div>
+          {blockedMachines.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {blockedMachines.map(renderMachineCard)}
+            </div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                You are eligible for every active resource.
+              </CardContent>
+            </Card>
+          )}
+        </section>
       </main>
     </div>
   )

@@ -1,4 +1,16 @@
 import { Link } from '@tanstack/react-router'
+import {
+  ArrowRight,
+  BellRing,
+  BookOpenCheck,
+  CalendarClock,
+  ClipboardCheck,
+  Settings,
+  ShieldAlert,
+  Users,
+  Wrench,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { AuthUser } from '~/server/auth/types'
 import { Header } from './Header'
@@ -21,14 +33,6 @@ import {
   CardHeader,
   CardTitle,
 } from '~/components/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table'
 
 interface DashboardProps {
   user: AuthUser
@@ -46,6 +50,7 @@ interface NavCardProps {
   to: string
   title: string
   description: string
+  icon: LucideIcon
   badge?: {
     label: string
     variant: 'info' | 'warning' | 'success'
@@ -53,20 +58,52 @@ interface NavCardProps {
   search?: Record<string, string>
 }
 
-function NavCard({ to, title, description, badge, search }: NavCardProps) {
+interface SummaryCardProps {
+  title: string
+  value: number | string
+  description: string
+  variant: 'info' | 'warning' | 'success'
+}
+
+function SummaryCard({ title, value, description, variant }: SummaryCardProps) {
+  return (
+    <Card>
+      <CardHeader className="space-y-1 pb-2">
+        <CardDescription>{title}</CardDescription>
+        <CardTitle className="text-2xl">{value}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Badge variant={variant}>{description}</Badge>
+      </CardContent>
+    </Card>
+  )
+}
+
+function NavCard({ to, title, description, icon: Icon, badge, search }: NavCardProps) {
   return (
     <Link
       to={to as never}
       search={search as never}
-      className="block rounded-xl transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <Card className="h-full">
-        <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-3">
-          <CardTitle className="text-lg">{title}</CardTitle>
-          {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
-        </CardHeader>
-        <CardContent>
+      <Card className="h-full transition-shadow hover:shadow-md">
+        <CardHeader className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="rounded-md bg-primary/10 p-1.5 text-primary">
+                <Icon className="h-4 w-4" />
+              </span>
+              <CardTitle className="text-lg">{title}</CardTitle>
+            </div>
+            {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
+          </div>
           <CardDescription>{description}</CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p className="inline-flex items-center gap-1 text-sm font-medium text-primary">
+            Open
+            <ArrowRight className="h-4 w-4" />
+          </p>
         </CardContent>
       </Card>
     </Link>
@@ -156,25 +193,71 @@ export function Dashboard({ user }: DashboardProps) {
     }
   }
 
+  const summaryCards: SummaryCardProps[] = [
+    {
+      title: 'Unread alerts',
+      value: unreadNotifications,
+      description: unreadNotifications > 0 ? 'Needs attention' : 'All clear',
+      variant: unreadNotifications > 0 ? 'warning' : 'success',
+    },
+    {
+      title: 'Workspace role',
+      value: `${user.role.charAt(0).toUpperCase()}${user.role.slice(1)}`,
+      description: 'Current access level',
+      variant: 'info',
+    },
+  ]
+
+  if (user.role === 'manager' || user.role === 'admin') {
+    summaryCards.push({
+      title: 'Checkout queue',
+      value: pendingCheckoutCount,
+      description: pendingCheckoutCount > 0 ? 'Pending review' : 'Up to date',
+      variant: pendingCheckoutCount > 0 ? 'warning' : 'success',
+    })
+  }
+
+  if (user.role === 'admin') {
+    summaryCards.push({
+      title: 'Booking requests',
+      value: pendingRequestCount,
+      description: pendingRequestCount > 0 ? 'Awaiting decisions' : 'No backlog',
+      variant: pendingRequestCount > 0 ? 'warning' : 'success',
+    })
+  }
+
   return (
     <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="container space-y-8 py-8">
+      <main className="container space-y-8 py-6 md:py-8">
         <section>
           <h1 className="text-3xl font-semibold tracking-tight">Welcome, {user.name || user.email}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage training, machine eligibility, and reservations from one dashboard.
+            Your dashboard is grouped by work area so core actions are faster to reach.
           </p>
         </section>
 
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {summaryCards.map((item) => (
+            <SummaryCard
+              key={item.title}
+              title={item.title}
+              value={item.value}
+              description={item.description}
+              variant={item.variant}
+            />
+          ))}
+        </section>
+
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 gap-3">
-            <div className="flex items-center gap-2">
-              <CardTitle>Notifications</CardTitle>
-              {unreadNotifications > 0 && (
-                <Badge variant="warning">{unreadNotifications} unread</Badge>
-              )}
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <BellRing className="h-4 w-4 text-muted-foreground" />
+                <CardTitle>Notifications</CardTitle>
+              </div>
+              <CardDescription>Recent updates relevant to your reservations and approvals.</CardDescription>
             </div>
             {notifications.length > 0 && unreadNotifications > 0 && (
               <Button variant="secondary" onClick={handleMarkAllRead} disabled={markingAll}>
@@ -184,39 +267,36 @@ export function Dashboard({ user }: DashboardProps) {
           </CardHeader>
           <CardContent>
             {notifications.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Title</TableHead>
-                    <TableHead>Message</TableHead>
-                    <TableHead>Time</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {notifications.map((notification) => (
-                    <TableRow key={notification.id}>
-                      <TableCell className="font-medium">{notification.title}</TableCell>
-                      <TableCell>{notification.message}</TableCell>
-                      <TableCell>{formatDateTime(notification.createdAt)}</TableCell>
-                      <TableCell>
-                        {notification.readAt ? (
-                          <Badge variant="info">Read</Badge>
-                        ) : (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => handleMarkRead(notification.id)}
-                            disabled={markingNotificationId === notification.id}
-                          >
-                            {markingNotificationId === notification.id ? 'Saving...' : 'Mark read'}
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <ul className="space-y-3">
+                {notifications.map((notification) => (
+                  <li
+                    key={notification.id}
+                    className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-start sm:justify-between"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium">{notification.title}</p>
+                        <Badge variant={notification.readAt ? 'info' : 'warning'}>
+                          {notification.readAt ? 'Read' : 'Unread'}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{notification.message}</p>
+                      <p className="text-xs text-muted-foreground">{formatDateTime(notification.createdAt)}</p>
+                    </div>
+                    {!notification.readAt && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handleMarkRead(notification.id)}
+                        disabled={markingNotificationId === notification.id}
+                        className="sm:self-start"
+                      >
+                        {markingNotificationId === notification.id ? 'Saving...' : 'Mark read'}
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
             ) : (
               <p className="text-sm text-muted-foreground">No notifications yet.</p>
             )}
@@ -229,79 +309,101 @@ export function Dashboard({ user }: DashboardProps) {
             <NavCard
               to="/training"
               title="Training"
-              description="Complete required training modules to unlock machine access."
+              description="Complete modules and track your progress toward machine access."
+              icon={BookOpenCheck}
             />
             <NavCard
               to="/machines"
               title="Machines"
-              description="View available machines and check your eligibility."
+              description="Find available resources and see what you can reserve now."
+              icon={Wrench}
             />
             <NavCard
               to="/reservations"
               title="Reservations"
-              description="View and manage your upcoming reservations."
+              description="View upcoming bookings and manage existing reservation requests."
+              icon={CalendarClock}
             />
           </div>
         </section>
 
         {(user.role === 'manager' || user.role === 'admin') && (
-          <section>
-            <h2 className="mb-3 text-xl font-semibold tracking-tight">Management</h2>
-            <div className="grid gap-4 md:grid-cols-3">
-              <NavCard
-                to="/admin/checkouts"
-                title="Checkout Approvals"
-                description="Approve member checkouts after training completion."
-                badge={{
-                  label:
-                    pendingCheckoutCount > 0
-                      ? `${pendingCheckoutCount} pending`
-                      : user.role === 'admin'
-                        ? 'Admin'
-                        : 'Manager',
-                  variant: pendingCheckoutCount > 0 ? 'warning' : 'info',
-                }}
-              />
+          <section className="space-y-6">
+            <h2 className="text-xl font-semibold tracking-tight">Management</h2>
 
-              {user.role === 'admin' && (
+            <div>
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Approvals
+              </h3>
+              <div className="grid gap-4 md:grid-cols-2">
                 <NavCard
-                  to="/admin/booking-requests"
-                  search={{ view: 'pending', q: '' }}
-                  title="Booking Requests"
-                  description="Review and moderate member reservation requests."
+                  to="/admin/checkouts"
+                  title="Checkout Approvals"
+                  description="Approve final checkout access for members who completed training."
+                  icon={ClipboardCheck}
                   badge={{
-                    label: pendingRequestCount > 0 ? `${pendingRequestCount} pending` : 'Admin',
-                    variant: 'warning',
+                    label: pendingCheckoutCount > 0 ? `${pendingCheckoutCount} pending` : 'Clear',
+                    variant: pendingCheckoutCount > 0 ? 'warning' : 'success',
                   }}
                 />
-              )}
 
-              {(user.role === 'manager' || user.role === 'admin') && (
+                {user.role === 'admin' && (
+                  <NavCard
+                    to="/admin/booking-requests"
+                    search={{ view: 'pending', q: '' }}
+                    title="Booking Requests"
+                    description="Moderate reservation requests that need administrative review."
+                    icon={ShieldAlert}
+                    badge={{
+                      label: pendingRequestCount > 0 ? `${pendingRequestCount} pending` : 'Clear',
+                      variant: pendingRequestCount > 0 ? 'warning' : 'success',
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Configuration
+              </h3>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <NavCard
                   to="/admin/machines"
-                  title="Manage Machines"
-                  description="Add and configure reservable resources and requirements."
-                  badge={{ label: user.role === 'admin' ? 'Admin' : 'Manager', variant: 'warning' }}
+                  title="Machines Admin"
+                  description="Configure machine availability and requirements."
+                  icon={Wrench}
+                  badge={{ label: user.role === 'admin' ? 'Admin' : 'Manager', variant: 'info' }}
                 />
-              )}
 
-              {(user.role === 'manager' || user.role === 'admin') && (
                 <NavCard
                   to="/admin/users"
                   title="Users"
-                  description="Manage member checkout access and view account details."
-                  badge={{ label: user.role === 'admin' ? 'Admin' : 'Manager', variant: 'warning' }}
+                  description="Manage member access and account status changes."
+                  icon={Users}
+                  badge={{ label: user.role === 'admin' ? 'Admin' : 'Manager', variant: 'info' }}
                 />
-              )}
 
-              {user.role === 'admin' && (
-                <NavCard
-                  to="/admin/training"
-                  title="Manage Training"
-                  description="Create and manage training modules."
-                  badge={{ label: 'Admin', variant: 'warning' }}
-                />
-              )}
+                {user.role === 'admin' && (
+                  <NavCard
+                    to="/admin/training"
+                    title="Training Admin"
+                    description="Create and update training content tied to machine eligibility."
+                    icon={BookOpenCheck}
+                    badge={{ label: 'Admin', variant: 'info' }}
+                  />
+                )}
+
+                {user.role === 'admin' && (
+                  <NavCard
+                    to="/admin/settings"
+                    title="Settings"
+                    description="Update scheduling and makerspace-level system defaults."
+                    icon={Settings}
+                    badge={{ label: 'Admin', variant: 'info' }}
+                  />
+                )}
+              </div>
             </div>
           </section>
         )}

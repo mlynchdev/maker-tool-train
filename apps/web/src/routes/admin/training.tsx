@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
+import { Plus, Search, Video } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { requireAdmin } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
@@ -8,6 +9,12 @@ import { Header } from '~/components/Header'
 import { createTrainingModule, updateTrainingModule } from '~/server/api/admin'
 import { YouTubePreview } from '~/components/YouTubePreview'
 import { formatDuration, normalizeYouTubeId } from '~/lib/youtube'
+import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
+import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
+import { Input } from '~/components/ui/input'
+import { Label } from '~/components/ui/label'
 
 const getAdminTrainingData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireAdmin()
@@ -36,6 +43,7 @@ export const Route = createFileRoute('/admin/training')({
 function AdminTrainingPage() {
   const { user, modules: initialModules } = Route.useLoaderData()
   const [moduleList, setModuleList] = useState(initialModules)
+  const [moduleQuery, setModuleQuery] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -43,7 +51,6 @@ function AdminTrainingPage() {
   const [editError, setEditError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
-  // Create form state
   const [newTitle, setNewTitle] = useState('')
   const [newTitleTouched, setNewTitleTouched] = useState(false)
   const [newDescription, setNewDescription] = useState('')
@@ -52,7 +59,6 @@ function AdminTrainingPage() {
   const [newDurationOverride, setNewDurationOverride] = useState(false)
   const [newDurationMinutes, setNewDurationMinutes] = useState('')
 
-  // Edit form state
   const [editTitle, setEditTitle] = useState('')
   const [editTitleTouched, setEditTitleTouched] = useState(false)
   const [editDescription, setEditDescription] = useState('')
@@ -69,6 +75,25 @@ function AdminTrainingPage() {
     () => normalizeYouTubeId(editVideoInput),
     [editVideoInput]
   )
+
+  const filteredModules = useMemo(() => {
+    const query = moduleQuery.trim().toLowerCase()
+    if (!query) return moduleList
+
+    return moduleList.filter((module) => {
+      const usedBy = module.requirements
+        ?.map((req) => req.machine?.name || '')
+        .join(' ')
+        .toLowerCase()
+
+      return (
+        module.title.toLowerCase().includes(query) ||
+        (module.description || '').toLowerCase().includes(query) ||
+        module.youtubeVideoId.toLowerCase().includes(query) ||
+        usedBy.includes(query)
+      )
+    })
+  }, [moduleList, moduleQuery])
 
   const resetCreateForm = () => {
     setNewTitle('')
@@ -189,7 +214,7 @@ function AdminTrainingPage() {
         resetCreateForm()
         setSuccessMessage('Training module created. Assign it to machines next.')
       }
-    } catch (error) {
+    } catch {
       setCreateError('Failed to create module')
     } finally {
       setSaving(false)
@@ -279,7 +304,7 @@ function AdminTrainingPage() {
         )
         setEditingId(null)
       }
-    } catch (error) {
+    } catch {
       setEditError('Failed to update module')
     } finally {
       setSaving(false)
@@ -297,7 +322,7 @@ function AdminTrainingPage() {
           prev.map((m) => (m.id === moduleId ? { ...m, active } : m))
         )
       }
-    } catch (error) {
+    } catch {
       alert('Failed to update module')
     }
   }
@@ -309,12 +334,11 @@ function AdminTrainingPage() {
     onOverrideChange: (value: string) => void,
     onToggleOverride: () => void
   ) => (
-    <div className="form-group">
-      <label className="form-label">Duration</label>
-      <div className="flex gap-1">
-        <input
+    <div className="space-y-2">
+      <Label>Duration (minutes)</Label>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Input
           type="number"
-          className="form-input"
           value={
             override
               ? overrideMinutes
@@ -326,17 +350,18 @@ function AdminTrainingPage() {
           min="1"
           step="1"
           disabled={!override}
+          className="sm:max-w-[220px]"
         />
-        <button type="button" className="btn btn-secondary" onClick={onToggleOverride}>
-          {override ? 'Use Auto' : 'Edit'}
-        </button>
+        <Button type="button" variant="outline" onClick={onToggleOverride}>
+          {override ? 'Use auto duration' : 'Edit manually'}
+        </Button>
       </div>
-      <p className="text-small text-muted mt-1">
+      <p className="text-xs text-muted-foreground">
         {override
-          ? 'Override duration in minutes. Ensure it is at least the actual video length.'
+          ? 'Manual override must be at least the real video length.'
           : autoDuration
             ? `Auto-detected from preview: ${formatDuration(autoDuration)}.`
-            : 'Duration will auto-fill once the preview loads.'}
+            : 'Duration auto-fills after preview metadata loads.'}
       </p>
     </div>
   )
@@ -351,39 +376,85 @@ function AdminTrainingPage() {
       ? 'Invalid YouTube URL or ID.'
       : null
 
+  const textareaClassName =
+    'w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+
   return (
-    <div>
+    <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="main">
-        <div className="container">
-          <div className="flex flex-between flex-center mb-3">
-            <h1>Manage Training Modules</h1>
-            <button className="btn btn-primary" onClick={toggleCreate}>
-              {showCreate ? 'Cancel' : 'Add Module'}
-            </button>
+      <main className="container space-y-8 py-6 md:py-8">
+        <section className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Training Module Administration</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Maintain content quality and machine eligibility mappings from one editor.
+            </p>
           </div>
+          <Button onClick={toggleCreate}>
+            <Plus className="mr-2 h-4 w-4" />
+            {showCreate ? 'Close form' : 'Add module'}
+          </Button>
+        </section>
 
-          {successMessage && (
-            <div className="alert alert-success">
+        <section className="grid gap-4 sm:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Total modules</CardDescription>
+              <CardTitle className="text-2xl">{moduleList.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Active</CardDescription>
+              <CardTitle className="text-2xl">{moduleList.filter((module) => module.active).length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Linked to machines</CardDescription>
+              <CardTitle className="text-2xl">
+                {moduleList.filter((module) => module.requirements.length > 0).length}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+        </section>
+
+        {successMessage && (
+          <Alert className="border-emerald-200 bg-emerald-50 text-emerald-900">
+            <AlertTitle>Module created</AlertTitle>
+            <AlertDescription>
               {successMessage}{' '}
-              <Link to="/admin/machines" className="text-small">
+              <Link to="/admin/machines" className="font-medium underline">
                 Assign to machines
               </Link>
-            </div>
-          )}
+            </AlertDescription>
+          </Alert>
+        )}
 
-          {showCreate && (
-            <div className="card mb-3">
-              <h3 className="card-title mb-2">New Training Module</h3>
-              {createError && <div className="alert alert-danger">{createError}</div>}
-              <form onSubmit={handleCreate}>
-                <div className="grid grid-2">
-                  <div className="form-group">
-                    <label className="form-label">Title</label>
-                    <input
+        {showCreate && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">New training module</CardTitle>
+              <CardDescription>
+                Add title, video source, and duration. Preview fills metadata automatically.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleCreate} className="space-y-4">
+                {createError && (
+                  <Alert variant="destructive">
+                    <AlertTitle>Unable to create module</AlertTitle>
+                    <AlertDescription>{createError}</AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="new-module-title">Title</Label>
+                    <Input
+                      id="new-module-title"
                       type="text"
-                      className="form-input"
                       value={newTitle}
                       onChange={(e) => {
                         setNewTitle(e.target.value)
@@ -392,11 +463,11 @@ function AdminTrainingPage() {
                       required
                     />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">YouTube URL or ID</label>
-                    <input
+                  <div className="space-y-2">
+                    <Label htmlFor="new-module-video">YouTube URL or ID</Label>
+                    <Input
+                      id="new-module-video"
                       type="text"
-                      className="form-input"
                       value={newVideoInput}
                       onChange={(e) => {
                         setNewVideoInput(e.target.value)
@@ -408,17 +479,18 @@ function AdminTrainingPage() {
                       placeholder="https://www.youtube.com/watch?v=..."
                       required
                     />
-                    <p className="text-small text-muted mt-1">
-                      Accepts full YouTube URLs, share links, or the 11-character video ID.
+                    <p className="text-xs text-muted-foreground">
+                      Accepts full links, share URLs, and raw 11-character IDs.
                     </p>
-                    {newVideoError && <div className="form-error">{newVideoError}</div>}
+                    {newVideoError && <p className="text-xs text-destructive">{newVideoError}</p>}
                   </div>
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">Description</label>
+                <div className="space-y-2">
+                  <Label htmlFor="new-module-description">Description</Label>
                   <textarea
-                    className="form-input"
+                    id="new-module-description"
+                    className={textareaClassName}
                     rows={3}
                     value={newDescription}
                     onChange={(e) => setNewDescription(e.target.value)}
@@ -435,207 +507,234 @@ function AdminTrainingPage() {
                 )}
 
                 {newVideoId && (
-                  <div className="card mb-2">
-                    <h4 className="card-title mb-2">Preview</h4>
-                    <YouTubePreview
-                      videoId={newVideoId}
-                      onMetadata={(metadata) => {
-                        if (metadata.durationSeconds) {
-                          setNewAutoDuration(metadata.durationSeconds)
-                          if (!newDurationOverride) {
-                            setNewDurationMinutes(
-                              Math.ceil(metadata.durationSeconds / 60).toString()
-                            )
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Preview</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <YouTubePreview
+                        videoId={newVideoId}
+                        onMetadata={(metadata) => {
+                          if (metadata.durationSeconds) {
+                            setNewAutoDuration(metadata.durationSeconds)
+                            if (!newDurationOverride) {
+                              setNewDurationMinutes(
+                                Math.ceil(metadata.durationSeconds / 60).toString()
+                              )
+                            }
                           }
-                        }
-                        if (!newTitleTouched && !newTitle.trim() && metadata.title) {
-                          setNewTitle(metadata.title)
-                        }
-                      }}
-                    />
-                  </div>
+                          if (!newTitleTouched && !newTitle.trim() && metadata.title) {
+                            setNewTitle(metadata.title)
+                          }
+                        }}
+                      />
+                    </CardContent>
+                  </Card>
                 )}
 
-                <div className="flex gap-2">
-                  <button type="submit" className="btn btn-primary" disabled={saving}>
-                    {saving ? 'Creating...' : 'Create Module'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={toggleCreate}
-                  >
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={saving}>
+                    {saving ? 'Creating...' : 'Create module'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={toggleCreate}>
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               </form>
-            </div>
-          )}
+            </CardContent>
+          </Card>
+        )}
 
-          <h2 className="mb-2">Existing Modules</h2>
-
-          {moduleList.length === 0 ? (
-            <div className="card">
-              <p className="text-center text-muted">No training modules configured.</p>
+        <Card>
+          <CardHeader className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">Existing modules</CardTitle>
+                <CardDescription>Search by title, description, video ID, or linked machine.</CardDescription>
+              </div>
+              <div className="relative w-full max-w-sm">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={moduleQuery}
+                  onChange={(e) => setModuleQuery(e.target.value)}
+                  placeholder="Search modules"
+                  className="pl-9"
+                />
+              </div>
             </div>
-          ) : (
-            moduleList.map((module) => {
+          </CardHeader>
+        </Card>
+
+        {filteredModules.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-muted-foreground">
+              No training modules match your filters.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-4">
+            {filteredModules.map((module) => {
               const machineNames = module.requirements
                 ?.map((req) => req.machine?.name)
                 .filter(Boolean) as string[]
 
               return (
-                <div key={module.id} className="card">
-                  <div className="flex flex-between flex-center mb-1">
-                    <div>
-                      <div className="card-title">{module.title}</div>
-                      {module.description && (
-                        <div className="text-small text-muted">
-                          {module.description}
-                        </div>
-                      )}
+                <Card key={module.id}>
+                  <CardHeader className="space-y-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-lg">{module.title}</CardTitle>
+                        {module.description && (
+                          <CardDescription className="mt-1">{module.description}</CardDescription>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant={module.active ? 'success' : 'destructive'}>
+                          {module.active ? 'Active' : 'Inactive'}
+                        </Badge>
+                        <Badge variant="outline">{formatDuration(module.durationSeconds)}</Badge>
+                      </div>
                     </div>
-                    <div className="flex gap-1">
-                      <span
-                        className={`badge ${module.active ? 'badge-success' : 'badge-danger'}`}
-                      >
-                        {module.active ? 'Active' : 'Inactive'}
-                      </span>
-                      <button className="btn btn-secondary" onClick={() => startEdit(module)}>
-                        Edit
-                      </button>
-                      <button
-                        className={`btn ${module.active ? 'btn-danger' : 'btn-success'}`}
+                  </CardHeader>
+
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+                      <p className="flex items-center gap-2">
+                        <Video className="h-4 w-4" />
+                        Video ID: {module.youtubeVideoId}
+                      </p>
+                      <p>Used by: {machineNames.length > 0 ? machineNames.length : 0} machine(s)</p>
+                      <p>
+                        Linked machines: {machineNames.length > 0 ? machineNames.join(', ') : 'None'}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" size="sm" onClick={() => startEdit(module)}>
+                        Edit module
+                      </Button>
+                      <Button
+                        variant={module.active ? 'destructive' : 'default'}
+                        size="sm"
                         onClick={() => handleToggleActive(module.id, !module.active)}
                       >
                         {module.active ? 'Deactivate' : 'Activate'}
-                      </button>
+                      </Button>
                     </div>
-                  </div>
 
-                  <div className="grid grid-3 text-small text-muted mt-2">
-                    <div>Video ID: {module.youtubeVideoId}</div>
-                    <div>Duration: {formatDuration(module.durationSeconds)}</div>
-                    <div>
-                      Used by:{' '}
-                      {machineNames && machineNames.length > 0
-                        ? machineNames.join(', ')
-                        : 'No machines'}
-                    </div>
-                  </div>
+                    {editingId === module.id && (
+                      <div className="space-y-4 border-t pt-4">
+                        <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                          Edit Module
+                        </h4>
 
-                  {editingId === module.id && (
-                    <div
-                      style={{
-                        borderTop: '1px solid #e0e0e0',
-                        marginTop: '1rem',
-                        paddingTop: '1rem',
-                      }}
-                    >
-                      <h4 className="card-title mb-2">Edit Module</h4>
-                      {editError && <div className="alert alert-danger">{editError}</div>}
-                      <form onSubmit={handleUpdate}>
-                        <div className="grid grid-2">
-                          <div className="form-group">
-                            <label className="form-label">Title</label>
-                            <input
-                              type="text"
-                              className="form-input"
-                              value={editTitle}
-                              onChange={(e) => {
-                                setEditTitle(e.target.value)
-                                setEditTitleTouched(true)
-                              }}
-                            />
-                          </div>
-                          <div className="form-group">
-                            <label className="form-label">YouTube URL or ID</label>
-                            <input
-                              type="text"
-                              className="form-input"
-                              value={editVideoInput}
-                              onChange={(e) => {
-                                setEditVideoInput(e.target.value)
-                                setEditAutoDuration(null)
-                                if (!editDurationOverride) {
-                                  setEditDurationMinutes('')
-                                }
-                              }}
-                            />
-                            {editVideoError && (
-                              <div className="form-error">{editVideoError}</div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="form-group">
-                          <label className="form-label">Description</label>
-                          <textarea
-                            className="form-input"
-                            rows={3}
-                            value={editDescription}
-                            onChange={(e) => setEditDescription(e.target.value)}
-                          />
-                        </div>
-
-                        {renderDurationInput(
-                          editAutoDuration,
-                          editDurationOverride,
-                          editDurationMinutes,
-                          (value) => setEditDurationMinutes(value),
-                          toggleEditDurationOverride
+                        {editError && (
+                          <Alert variant="destructive">
+                            <AlertTitle>Unable to save module</AlertTitle>
+                            <AlertDescription>{editError}</AlertDescription>
+                          </Alert>
                         )}
 
-                        {editVideoId && (
-                          <div className="card mb-2">
-                            <h4 className="card-title mb-2">Preview</h4>
-                            <YouTubePreview
-                              videoId={editVideoId}
-                              onMetadata={(metadata) => {
-                                if (metadata.durationSeconds) {
-                                  setEditAutoDuration(metadata.durationSeconds)
+                        <form onSubmit={handleUpdate} className="space-y-4">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label htmlFor={`edit-title-${module.id}`}>Title</Label>
+                              <Input
+                                id={`edit-title-${module.id}`}
+                                type="text"
+                                value={editTitle}
+                                onChange={(e) => {
+                                  setEditTitle(e.target.value)
+                                  setEditTitleTouched(true)
+                                }}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`edit-video-${module.id}`}>YouTube URL or ID</Label>
+                              <Input
+                                id={`edit-video-${module.id}`}
+                                type="text"
+                                value={editVideoInput}
+                                onChange={(e) => {
+                                  setEditVideoInput(e.target.value)
+                                  setEditAutoDuration(null)
                                   if (!editDurationOverride) {
-                                    setEditDurationMinutes(
-                                      Math.ceil(metadata.durationSeconds / 60).toString()
-                                    )
+                                    setEditDurationMinutes('')
                                   }
-                                }
-                                if (
-                                  !editTitleTouched &&
-                                  !editTitle.trim() &&
-                                  metadata.title
-                                ) {
-                                  setEditTitle(metadata.title)
-                                }
-                              }}
+                                }}
+                              />
+                              {editVideoError && (
+                                <p className="text-xs text-destructive">{editVideoError}</p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor={`edit-description-${module.id}`}>Description</Label>
+                            <textarea
+                              id={`edit-description-${module.id}`}
+                              className={textareaClassName}
+                              rows={3}
+                              value={editDescription}
+                              onChange={(e) => setEditDescription(e.target.value)}
                             />
                           </div>
-                        )}
 
-                        <div className="flex gap-2">
-                          <button
-                            type="submit"
-                            className="btn btn-success"
-                            disabled={saving}
-                          >
-                            {saving ? 'Saving...' : 'Save Changes'}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={cancelEdit}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </form>
-                    </div>
-                  )}
-                </div>
+                          {renderDurationInput(
+                            editAutoDuration,
+                            editDurationOverride,
+                            editDurationMinutes,
+                            (value) => setEditDurationMinutes(value),
+                            toggleEditDurationOverride
+                          )}
+
+                          {editVideoId && (
+                            <Card>
+                              <CardHeader>
+                                <CardTitle className="text-sm">Preview</CardTitle>
+                              </CardHeader>
+                              <CardContent>
+                                <YouTubePreview
+                                  videoId={editVideoId}
+                                  onMetadata={(metadata) => {
+                                    if (metadata.durationSeconds) {
+                                      setEditAutoDuration(metadata.durationSeconds)
+                                      if (!editDurationOverride) {
+                                        setEditDurationMinutes(
+                                          Math.ceil(metadata.durationSeconds / 60).toString()
+                                        )
+                                      }
+                                    }
+                                    if (
+                                      !editTitleTouched &&
+                                      !editTitle.trim() &&
+                                      metadata.title
+                                    ) {
+                                      setEditTitle(metadata.title)
+                                    }
+                                  }}
+                                />
+                              </CardContent>
+                            </Card>
+                          )}
+
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="submit" disabled={saving}>
+                              {saving ? 'Saving...' : 'Save changes'}
+                            </Button>
+                            <Button type="button" variant="outline" onClick={cancelEdit}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               )
-            })
-          )}
-        </div>
+            })}
+          </div>
+        )}
       </main>
     </div>
   )
