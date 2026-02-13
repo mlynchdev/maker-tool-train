@@ -12,9 +12,12 @@ dist/
 .env.local
 .env.*.local
 
-# IDE
+# IDE & tool config
 .vscode/
 .idea/
+.agents/
+.claude/
+.cursor/
 *.swp
 *.swo
 .DS_Store
