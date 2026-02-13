@@ -58,10 +58,6 @@ function AdminMachinesPage() {
   )
   const [newTrainingDurationMinutes, setNewTrainingDurationMinutes] = useState(30)
 
-  if (childMatches.length > 0) {
-    return <Outlet />
-  }
-
   const normalizedQuery = machineQuery.trim().toLowerCase()
 
   const filteredMachines = useMemo(() => {
@@ -81,6 +77,10 @@ function AdminMachinesPage() {
 
   const activeMachines = filteredMachines.filter((machine) => machine.active)
   const inactiveMachines = filteredMachines.filter((machine) => !machine.active)
+
+  if (childMatches.length > 0) {
+    return <Outlet />
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
