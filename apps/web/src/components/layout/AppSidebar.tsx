@@ -1,4 +1,4 @@
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import {
   BookOpenCheck,
   CalendarClock,
@@ -32,8 +32,16 @@ interface AppSidebarProps {
   onClose?: () => void
 }
 
+function normalizePath(pathname: string) {
+  if (pathname !== '/' && pathname.endsWith('/')) {
+    return pathname.slice(0, -1)
+  }
+  return pathname
+}
+
 export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user, badges } = useShellContext()
 
   const isManagerOrAdmin = user.role === 'manager' || user.role === 'admin'
@@ -113,32 +121,53 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
     navigate({ to: '/' })
   }
 
-  const renderLink = (link: SidebarLink) => (
-    <Link
-      key={link.title}
-      to={link.to as never}
-      search={link.search as never}
-      onClick={onNavigate}
-      className={({ isActive }) =>
-        cn(
-          'flex items-center justify-between rounded-lg px-2.5 py-2 text-sm transition-colors',
-          isActive
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
-        )
-      }
-    >
-      <span className="flex items-center gap-2">
-        <link.icon className="h-4 w-4" />
-        {link.title}
-      </span>
-      {typeof link.badge === 'number' && link.badge > 0 && (
-        <Badge variant="warning" className="min-w-5 justify-center px-1.5 py-0 text-[11px]">
-          {link.badge}
-        </Badge>
-      )}
-    </Link>
-  )
+  const currentPath = normalizePath(location.pathname)
+
+  const isLinkActive = (to: string) => {
+    const target = normalizePath(to)
+
+    if (target === '/') {
+      return currentPath === '/'
+    }
+
+    return currentPath === target || currentPath.startsWith(`${target}/`)
+  }
+
+  const renderLink = (link: SidebarLink) => {
+    const active = isLinkActive(link.to)
+
+    return (
+      <Link
+        key={link.title}
+        to={link.to as never}
+        search={link.search as never}
+        onClick={onNavigate}
+        className={cn(
+          'group flex items-center justify-between rounded-lg border-l-2 px-2.5 py-2 text-sm transition-colors',
+          active
+            ? 'border-l-primary bg-primary/10 text-primary'
+            : 'border-l-transparent text-muted-foreground hover:border-l-primary/45 hover:bg-accent/35 hover:text-foreground'
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <link.icon className={cn('h-4 w-4 transition-colors', active ? 'text-primary' : 'text-current/85')} />
+          <span
+            className={cn(
+              'font-medium decoration-2 underline-offset-4 transition-colors',
+              active && 'font-semibold underline decoration-primary/70'
+            )}
+          >
+            {link.title}
+          </span>
+        </span>
+        {typeof link.badge === 'number' && link.badge > 0 && (
+          <Badge variant="warning" className="min-w-5 justify-center px-1.5 py-0 text-[11px]">
+            {link.badge}
+          </Badge>
+        )}
+      </Link>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col">
