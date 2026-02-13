@@ -5,7 +5,7 @@ interface Subscription {
   callback: EventCallback
 }
 
-class EventBus {
+export class EventBus {
   private subscriptions: Map<string, Set<Subscription>> = new Map()
 
   subscribe(channel: string, userId: string, callback: EventCallback): () => void {

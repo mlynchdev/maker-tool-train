@@ -92,8 +92,6 @@ function mockUpdateReturning(row: Record<string, unknown>) {
 
 describe('booking-workflow service', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-
     mocks.checkEligibility.mockResolvedValue({
       eligible: true,
       reasons: [],
@@ -314,6 +312,102 @@ describe('booking-workflow service', () => {
       })
     )
     expect(broadcastMachineAvailabilityChange).toHaveBeenCalledWith('machine-1')
+  })
+
+  it('returns a validation error when end time is before start time', async () => {
+    const result = await createBookingRequest({
+      userId: 'user-1',
+      machineId: 'machine-1',
+      startTime: new Date('2026-02-15T11:00:00.000Z'),
+      endTime: new Date('2026-02-15T10:00:00.000Z'),
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'End time must be after start time',
+    })
+  })
+
+  it('rejects booking when there is a time conflict', async () => {
+    mocks.db.query.machines.findFirst.mockResolvedValue({
+      id: 'machine-1',
+      name: 'Laser Cutter',
+      active: true,
+    })
+    mocks.findReservationConflicts.mockResolvedValue([{ id: 'existing-booking' }])
+
+    const result = await createBookingRequest({
+      userId: 'user-1',
+      machineId: 'machine-1',
+      startTime: new Date('2026-02-15T10:00:00.000Z'),
+      endTime: new Date('2026-02-15T11:00:00.000Z'),
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Selected time overlaps an existing booking',
+    })
+  })
+
+  it('returns not found when moderating a nonexistent reservation', async () => {
+    mocks.db.query.reservations.findFirst.mockResolvedValue(null)
+
+    const result = await moderateBookingRequest({
+      reservationId: 'nonexistent',
+      reviewerId: 'admin-1',
+      decision: 'approve',
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Reservation not found',
+    })
+  })
+
+  it('approves a pending reservation when there are no conflicts', async () => {
+    const updatedReservation = {
+      id: 'reservation-1',
+      userId: 'user-1',
+      machineId: 'machine-1',
+      status: 'approved',
+      startTime: new Date('2026-02-15T10:00:00.000Z'),
+      endTime: new Date('2026-02-15T11:00:00.000Z'),
+    }
+
+    mocks.db.query.reservations.findFirst.mockResolvedValue({
+      id: 'reservation-1',
+      userId: 'user-1',
+      machineId: 'machine-1',
+      status: 'pending',
+      startTime: new Date('2026-02-15T10:00:00.000Z'),
+      endTime: new Date('2026-02-15T11:00:00.000Z'),
+      machine: { id: 'machine-1', name: 'Laser Cutter' },
+    })
+    mockUpdateReturning(updatedReservation)
+
+    const result = await moderateBookingRequest({
+      reservationId: 'reservation-1',
+      reviewerId: 'admin-1',
+      decision: 'approve',
+    })
+
+    expect(result).toEqual({
+      success: true,
+      reservation: updatedReservation,
+    })
+    expect(emitBookingEvent).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        type: 'approved',
+        status: 'approved',
+      })
+    )
+    expect(notifyUserBookingDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        status: 'approved',
+      })
+    )
   })
 
 })
