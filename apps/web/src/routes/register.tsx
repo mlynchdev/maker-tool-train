@@ -1,6 +1,11 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { register } from '~/server/api/auth'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
+import { Input } from '~/components/ui/input'
+import { Label } from '~/components/ui/label'
+import { Alert, AlertDescription } from '~/components/ui/alert'
 
 export const Route = createFileRoute('/register')({
   component: RegisterPage,
@@ -47,88 +52,94 @@ function RegisterPage() {
   }
 
   return (
-    <div className="landing">
-      <header className="header">
-        <div className="container header-inner">
-          <a href="/" className="logo">
+    <div className="min-h-screen bg-gradient-to-b from-background via-background to-slate-100/70">
+      <header className="border-b bg-background/95 backdrop-blur">
+        <div className="container flex items-center py-4">
+          <a href="/" className="text-lg font-semibold tracking-tight">
             Training System
           </a>
         </div>
       </header>
 
-      <div className="hero">
-        <div className="card" style={{ width: '100%', maxWidth: '400px' }}>
-          <h2 className="mb-2">Create Account</h2>
+      <main className="container flex min-h-[calc(100vh-73px)] items-center justify-center py-12">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Create Account</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
 
-          {error && <div className="alert alert-danger">{error}</div>}
-
-          <form onSubmit={handleSubmit}>
-            <div className="form-group">
-              <label htmlFor="name" className="form-label">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">
                 Name (optional)
-              </label>
-              <input
-                id="name"
-                type="text"
-                className="form-input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
+                </Label>
+                <Input
+                  id="name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
 
-            <div className="form-group">
-              <label htmlFor="email" className="form-label">
+              <div className="space-y-2">
+                <Label htmlFor="email">
                 Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                className="form-input"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
 
-            <div className="form-group">
-              <label htmlFor="password" className="form-label">
+              <div className="space-y-2">
+                <Label htmlFor="password">
                 Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                className="form-input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
-              />
-            </div>
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={8}
+                />
+              </div>
 
-            <div className="form-group">
-              <label htmlFor="confirmPassword" className="form-label">
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword">
                 Confirm Password
-              </label>
-              <input
-                id="confirmPassword"
-                type="password"
-                className="form-input"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-              />
-            </div>
+                </Label>
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                />
+              </div>
 
-            <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%' }}>
-              {loading ? 'Creating account...' : 'Create Account'}
-            </button>
-          </form>
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? 'Creating account...' : 'Create Account'}
+              </Button>
+            </form>
 
-          <p className="text-center mt-2 text-small">
-            Already have an account? <a href="/login">Sign in</a>
-          </p>
-        </div>
-      </div>
+            <p className="mt-4 text-center text-sm text-muted-foreground">
+              Already have an account?{' '}
+              <a href="/login" className="font-medium text-primary hover:underline">
+                Sign in
+              </a>
+            </p>
+          </CardContent>
+        </Card>
+      </main>
     </div>
   )
 }

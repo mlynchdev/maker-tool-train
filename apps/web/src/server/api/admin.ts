@@ -30,6 +30,7 @@ import {
   isValidIanaTimezone,
   setMakerspaceTimezone,
 } from '../services/makerspace-settings'
+import { deleteUserAccount } from '../services/user-management'
 
 const trainingDurationMinutesSchema = z.union([
   z.literal(15),
@@ -738,6 +739,23 @@ export const updateUser = createServerFn({ method: 'POST' })
       .returning()
 
     return { success: true, user }
+  })
+
+export const deleteUser = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        userId: z.string().uuid(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const admin = await requireAdmin()
+
+    return deleteUserAccount({
+      actorId: admin.id,
+      userId: data.userId,
+    })
   })
 
 // ============ Admin Dashboard Data ============

@@ -6,8 +6,13 @@ import { requireAuth } from '~/server/auth/middleware'
 import { db, machines } from '~/lib/db'
 import { checkEligibility } from '~/server/services/eligibility'
 import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
-import { Header } from '~/components/Header'
 import { reserveMachine } from '~/server/api/machines'
+import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
+import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
+import { Input } from '~/components/ui/input'
+import { Label } from '~/components/ui/label'
 
 function formatDateTimeLocal(date: Date) {
   const year = date.getFullYear()
@@ -50,7 +55,7 @@ const getReserveData = createServerFn({ method: 'GET' })
 
     const bookings = await getMachineBookingsInRange(machine.id, now, horizon)
 
-    return { user, machine, bookings, eligibility }
+    return { machine, bookings, eligibility }
   })
 
 export const Route = createFileRoute('/machines/$machineId/reserve')({
@@ -61,7 +66,7 @@ export const Route = createFileRoute('/machines/$machineId/reserve')({
 })
 
 function ReserveMachinePage() {
-  const { user, machine, bookings, eligibility } = Route.useLoaderData()
+  const { machine, bookings, eligibility } = Route.useLoaderData()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -123,113 +128,129 @@ function ReserveMachinePage() {
     }
   }
 
+  const getStatusVariant = (status: string): 'success' | 'warning' | 'destructive' | 'info' => {
+    if (status === 'approved' || status === 'confirmed' || status === 'completed') {
+      return 'success'
+    }
+    if (status === 'pending') return 'warning'
+    if (status === 'cancelled' || status === 'rejected') return 'destructive'
+    return 'info'
+  }
+
   return (
-    <div>
-      <Header user={user} />
+    <div className="min-h-screen">
+      <main className="container space-y-6 py-6 md:py-8">
+        <Button asChild variant="ghost" className="w-fit px-0">
+          <Link to="/machines/$machineId" params={{ machineId: machine.id }}>
+            &larr; Back to {machine.name}
+          </Link>
+        </Button>
 
-      <main className="main">
-        <div className="container">
-          <div className="mb-2">
-            <Link
-              to="/machines/$machineId"
-              params={{ machineId: machine.id }}
-              className="text-small"
-            >
-              &larr; Back to {machine.name}
-            </Link>
-          </div>
+        <section>
+          <h1 className="text-3xl font-semibold tracking-tight">Request Time on {machine.name}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Choose your time range, then submit for review.
+          </p>
+        </section>
 
-          <h1 className="mb-3">Request Time on {machine.name}</h1>
+        {error && (
+          <Alert variant="destructive">
+            <AlertTitle>Reservation request failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-          {error && <div className="alert alert-danger mb-2">{error}</div>}
-
-          <div className="card mb-2">
-            <h3 className="card-title mb-2">Choose Start And End Time</h3>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Choose start and end time</CardTitle>
+            <CardDescription>Times are interpreted in your current local timezone.</CardDescription>
+          </CardHeader>
+          <CardContent>
             {eligibility.eligible ? (
-              <>
-                <div className="form-group">
-                  <label className="form-label">Start Time</label>
-                  <input
-                    type="datetime-local"
-                    className="form-input"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                  />
+              <div className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="start-time">Start time</Label>
+                    <Input
+                      id="start-time"
+                      type="datetime-local"
+                      value={startTime}
+                      onChange={(e) => setStartTime(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="end-time">End time</Label>
+                    <Input
+                      id="end-time"
+                      type="datetime-local"
+                      value={endTime}
+                      onChange={(e) => setEndTime(e.target.value)}
+                    />
+                  </div>
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">End Time</label>
-                  <input
-                    type="datetime-local"
-                    className="form-input"
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                  />
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={handleReserve} disabled={loading}>
+                    {loading ? 'Submitting...' : 'Submit request'}
+                  </Button>
+                  <Button asChild variant="outline">
+                    <Link to="/machines/$machineId" params={{ machineId: machine.id }}>
+                      Cancel
+                    </Link>
+                  </Button>
                 </div>
-
-                <div className="mt-3 flex gap-2">
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleReserve}
-                    disabled={loading}
-                  >
-                    {loading ? 'Submitting...' : 'Submit Request'}
-                  </button>
-                  <Link
-                    to="/machines/$machineId"
-                    params={{ machineId: machine.id }}
-                    className="btn btn-secondary"
-                  >
-                    Cancel
-                  </Link>
-                </div>
-              </>
-            ) : (
-              <div className="alert alert-warning">
-                <p className="mb-1">
-                  You can view availability, but you are not eligible to book yet.
-                </p>
-                <ul className="eligibility-list">
-                  {eligibility.reasons.map((reason, idx) => (
-                    <li key={idx} className="eligibility-item">
-                      <span className="text-small">{reason}</span>
-                    </li>
-                  ))}
-                </ul>
               </div>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 className="card-title mb-2">Upcoming Booked Times (Next 14 Days)</h3>
-            {bookings.length > 0 ? (
-              <div className="table-wrapper">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Start</th>
-                      <th>End</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {bookings.map((booking) => (
-                      <tr key={booking.id}>
-                        <td>{formatDisplayDate(booking.startTime)}</td>
-                        <td>{formatDisplayDate(booking.endTime)}</td>
-                        <td style={{ textTransform: 'capitalize' }}>{booking.status}</td>
-                      </tr>
+            ) : (
+              <Alert className="border-amber-300 bg-amber-50 text-amber-900">
+                <AlertTitle>You are not eligible yet</AlertTitle>
+                <AlertDescription>
+                  <p className="mb-2">Complete these requirements before requesting time:</p>
+                  <ul className="list-disc space-y-1 pl-4">
+                    {eligibility.reasons.map((reason, idx) => (
+                      <li key={idx}>{reason}</li>
                     ))}
-                  </tbody>
-                </table>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Upcoming booked times (next 14 days)</CardTitle>
+            <CardDescription>Use this to avoid conflicts before submitting your request.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {bookings.length > 0 ? (
+              <div className="space-y-3">
+                {bookings.map((booking) => (
+                  <div
+                    key={booking.id}
+                    className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="text-sm">
+                      <p>
+                        <span className="font-medium">Start:</span> {formatDisplayDate(booking.startTime)}
+                      </p>
+                      <p className="text-muted-foreground">
+                        <span className="font-medium text-foreground">End:</span> {formatDisplayDate(booking.endTime)}
+                      </p>
+                    </div>
+                    <Badge variant={getStatusVariant(booking.status)} className="w-fit capitalize">
+                      {booking.status}
+                    </Badge>
+                  </div>
+                ))}
               </div>
             ) : (
-              <p className="text-small text-muted">
+              <p className="text-sm text-muted-foreground">
                 No upcoming bookings in the next 14 days.
               </p>
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </main>
     </div>
   )

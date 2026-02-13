@@ -4,7 +4,6 @@ import { eq, asc } from 'drizzle-orm'
 import { useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
 import { db, machines, trainingModules } from '~/lib/db'
-import { Header } from '~/components/Header'
 import { updateMachine, setMachineRequirements } from '~/server/api/admin'
 
 const TRAINING_DURATION_OPTIONS = [
@@ -125,8 +124,6 @@ function EditMachinePage() {
 
   return (
     <div>
-      <Header user={user} />
-
       <main className="main">
         <div className="container">
           <div className="mb-2">

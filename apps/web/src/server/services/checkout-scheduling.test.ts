@@ -108,6 +108,21 @@ import {
   notifyUserCheckoutAppointmentCancelled,
 } from './notifications'
 
+function getMinuteOfDayInTimeZone(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    hourCycle: 'h23',
+  }).formatToParts(date)
+
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? '0')
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? '0')
+
+  return hour * 60 + minute
+}
+
 function mockInsertReturning(row: Record<string, unknown>) {
   const returning = vi.fn().mockResolvedValue([row])
   const values = vi.fn().mockReturnValue({ returning })
@@ -243,7 +258,7 @@ describe('checkout-scheduling service', () => {
     mocks.db.query.checkoutAvailabilityRules.findFirst.mockResolvedValue({
       id: 'rule-1',
       managerId: 'manager-1',
-      startMinuteOfDay: slotStartTime.getHours() * 60,
+      startMinuteOfDay: getMinuteOfDayInTimeZone(slotStartTime, 'America/Los_Angeles'),
       manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
     })
     mocks.checkEligibility.mockResolvedValue({
@@ -290,7 +305,7 @@ describe('checkout-scheduling service', () => {
     mocks.db.query.checkoutAvailabilityRules.findFirst.mockResolvedValue({
       id: 'rule-1',
       managerId: 'manager-1',
-      startMinuteOfDay: slotStartTime.getHours() * 60,
+      startMinuteOfDay: getMinuteOfDayInTimeZone(slotStartTime, 'America/Los_Angeles'),
       manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
     })
     mocks.db.query.checkoutAppointments.findFirst.mockResolvedValue(null)
@@ -370,7 +385,7 @@ describe('checkout-scheduling service', () => {
     mocks.db.query.checkoutAvailabilityRules.findFirst.mockResolvedValue({
       id: 'rule-1',
       managerId: 'manager-1',
-      startMinuteOfDay: slotStartTime.getHours() * 60,
+      startMinuteOfDay: getMinuteOfDayInTimeZone(slotStartTime, 'America/Los_Angeles'),
       manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
     })
     mocks.db.query.checkoutAppointments.findFirst.mockResolvedValue({ id: 'appointment-1' })
@@ -479,6 +494,8 @@ describe('checkout-scheduling service', () => {
   it('rejects booking when start time is not aligned to the training duration grid', async () => {
     const slotStartTime = new Date(Date.now() + 5 * 60 * 60 * 1000)
     slotStartTime.setMinutes(15, 0, 0)
+    const slotStartMinuteOfDay = getMinuteOfDayInTimeZone(slotStartTime, 'America/Los_Angeles')
+    const ruleStartMinuteOfDay = slotStartMinuteOfDay - (slotStartMinuteOfDay % 60)
 
     mocks.db.query.users.findFirst.mockResolvedValue({
       id: 'member-1',
@@ -495,7 +512,7 @@ describe('checkout-scheduling service', () => {
     mocks.db.query.checkoutAvailabilityRules.findFirst.mockResolvedValue({
       id: 'rule-1',
       managerId: 'manager-1',
-      startMinuteOfDay: slotStartTime.getHours() * 60,
+      startMinuteOfDay: ruleStartMinuteOfDay,
       manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
     })
 
@@ -532,7 +549,7 @@ describe('checkout-scheduling service', () => {
     mocks.db.query.checkoutAvailabilityRules.findFirst.mockResolvedValue({
       id: 'rule-1',
       managerId: 'manager-1',
-      startMinuteOfDay: slotStartTime.getHours() * 60,
+      startMinuteOfDay: getMinuteOfDayInTimeZone(slotStartTime, 'America/Los_Angeles'),
       manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
     })
     mocks.checkEligibility.mockResolvedValue({

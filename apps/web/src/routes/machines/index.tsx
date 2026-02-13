@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
+import { Badge } from '~/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { getMachines } from '~/server/api/machines'
-import { Header } from '~/components/Header'
 
 export const Route = createFileRoute('/machines/')({
   component: MachinesPage,
@@ -10,79 +11,133 @@ export const Route = createFileRoute('/machines/')({
 })
 
 function MachinesPage() {
-  const { user, machines } = Route.useLoaderData()
+  const { machines } = Route.useLoaderData()
 
-  const eligibleCount = machines.filter((m) => m.eligibility.eligible).length
+  const eligibleMachines = machines.filter((machine) => machine.eligibility.eligible)
+  const blockedMachines = machines.filter((machine) => !machine.eligibility.eligible)
+
+  const renderMachineCard = (machine: (typeof machines)[number]) => {
+    const reasons = Array.isArray(machine.eligibility?.reasons)
+      ? machine.eligibility.reasons
+      : []
+
+    return (
+      <Link
+        key={machine.id}
+        to="/machines/$machineId"
+        params={{ machineId: machine.id }}
+        className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Card className="h-full transition-shadow hover:shadow-md">
+          <CardHeader className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <CardTitle className="text-lg">{machine.name}</CardTitle>
+              {machine.eligibility.eligible ? (
+                <Badge variant="success">Ready</Badge>
+              ) : (
+                <Badge variant="warning">Needs steps</Badge>
+              )}
+            </div>
+            {machine.description && <CardDescription>{machine.description}</CardDescription>}
+          </CardHeader>
+
+          <CardContent className="space-y-3 pt-0">
+            {!machine.eligibility.eligible ? (
+              <div>
+                <p className="mb-2 text-sm text-muted-foreground">Next requirements:</p>
+                <ul className="space-y-2">
+                  {reasons.slice(0, 2).map((reason, index) => (
+                    <li key={index} className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
+                      {reason}
+                    </li>
+                  ))}
+                  {reasons.length > 2 && (
+                    <li className="text-sm text-muted-foreground">
+                      +{reasons.length - 2} more requirements
+                    </li>
+                  )}
+                  {reasons.length === 0 && (
+                    <li className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
+                      Missing requirements
+                    </li>
+                  )}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Open details to review schedule and request time.</p>
+            )}
+          </CardContent>
+        </Card>
+      </Link>
+    )
+  }
 
   return (
-    <div>
-      <Header user={user} />
+    <div className="min-h-screen">
+      <main className="container space-y-8 py-6 md:py-8">
+        <section>
+          <h1 className="text-3xl font-semibold tracking-tight">Machines</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Resources are grouped by readiness so you can reserve quickly or tackle requirements.
+          </p>
+        </section>
 
-      <main className="main">
-        <div className="container">
-          <div className="flex flex-between flex-center mb-3">
-            <h1>Machines</h1>
-            <span className="badge badge-info">
-              {eligibleCount} / {machines.length} available
-            </span>
+        <section className="grid gap-4 sm:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Ready to reserve</CardDescription>
+              <CardTitle className="text-2xl">{eligibleMachines.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Needs requirements</CardDescription>
+              <CardTitle className="text-2xl">{blockedMachines.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Total resources</CardDescription>
+              <CardTitle className="text-2xl">{machines.length}</CardTitle>
+            </CardHeader>
+          </Card>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Ready to reserve</h2>
+            <Badge variant="success">{eligibleMachines.length}</Badge>
           </div>
-
-          <div className="grid grid-2">
-            {machines.map((machine) => (
-              <Link
-                key={machine.id}
-                to="/machines/$machineId"
-                params={{ machineId: machine.id }}
-                className="card"
-                style={{ textDecoration: 'none', color: 'inherit' }}
-              >
-                <div className="card-header">
-                  <h3 className="card-title">{machine.name}</h3>
-                  {machine.eligibility.eligible ? (
-                    <span className="badge badge-success">Available</span>
-                  ) : (
-                    <span className="badge badge-warning">Requirements</span>
-                  )}
-                </div>
-
-                {machine.description && (
-                  <p className="text-muted text-small mb-2">{machine.description}</p>
-                )}
-
-                {!machine.eligibility.eligible && (
-                  <div className="mt-2">
-                    <p className="text-small text-muted">Missing requirements:</p>
-                    <ul className="eligibility-list">
-                      {machine.eligibility.reasons.slice(0, 2).map((reason, i) => (
-                        <li key={i} className="eligibility-item">
-                          <span className="eligibility-icon incomplete">!</span>
-                          <span className="text-small">{reason}</span>
-                        </li>
-                      ))}
-                      {machine.eligibility.reasons.length > 2 && (
-                        <li className="text-small text-muted">
-                          +{machine.eligibility.reasons.length - 2} more
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                )}
-
-                {machine.eligibility.eligible && (
-                  <p className="text-small text-muted mt-2">
-                    Click to view availability and make a reservation.
-                  </p>
-                )}
-              </Link>
-            ))}
-          </div>
-
-          {machines.length === 0 && (
-            <div className="card">
-              <p className="text-center text-muted">No machines available.</p>
+          {eligibleMachines.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {eligibleMachines.map(renderMachineCard)}
             </div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                Complete training modules to unlock your first machine.
+              </CardContent>
+            </Card>
           )}
-        </div>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Needs requirements</h2>
+            <Badge variant="warning">{blockedMachines.length}</Badge>
+          </div>
+          {blockedMachines.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {blockedMachines.map(renderMachineCard)}
+            </div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                You are eligible for every active resource.
+              </CardContent>
+            </Card>
+          )}
+        </section>
       </main>
     </div>
   )

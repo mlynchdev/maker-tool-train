@@ -5,13 +5,12 @@ import { useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
 import { db, users, machines } from '~/lib/db'
 import { checkEligibility } from '~/server/services/eligibility'
-import { Header } from '~/components/Header'
 import { approveCheckout, revokeCheckout } from '~/server/api/admin'
 
 const getUserCheckoutData = createServerFn({ method: 'GET' })
   .inputValidator((data: { userId: string }) => data)
   .handler(async ({ data }) => {
-    const currentUser = await requireManager()
+    await requireManager()
 
     const member = await db.query.users.findFirst({
       where: eq(users.id, data.userId),
@@ -56,7 +55,7 @@ const getUserCheckoutData = createServerFn({ method: 'GET' })
       })
     )
 
-    return { user: currentUser, member, machineStatuses }
+    return { member, machineStatuses }
   })
 
 export const Route = createFileRoute('/admin/checkouts/$userId')({
@@ -67,7 +66,7 @@ export const Route = createFileRoute('/admin/checkouts/$userId')({
 })
 
 function UserCheckoutPage() {
-  const { user, member, machineStatuses: initialStatuses } = Route.useLoaderData()
+  const { member, machineStatuses: initialStatuses } = Route.useLoaderData()
   const [machineStatuses, setMachineStatuses] = useState(initialStatuses)
   const [processing, setProcessing] = useState<string | null>(null)
 
@@ -137,8 +136,6 @@ function UserCheckoutPage() {
 
   return (
     <div>
-      <Header user={user} />
-
       <main className="main">
         <div className="container">
           <div className="mb-2">

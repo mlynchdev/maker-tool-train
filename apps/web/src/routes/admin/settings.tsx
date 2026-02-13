@@ -1,7 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useState } from 'react'
-import { Header } from '~/components/Header'
 import { requireAdmin } from '~/server/auth/middleware'
 import { updateMakerspaceSettings } from '~/server/api/admin'
 import {
@@ -10,10 +9,9 @@ import {
 } from '~/server/services/makerspace-settings'
 
 const getAdminSettingsData = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await requireAdmin()
+  await requireAdmin()
 
   return {
-    user,
     timezone: await getMakerspaceTimezone(),
     timezoneOptions: getSupportedIanaTimezones(),
   }
@@ -27,7 +25,7 @@ export const Route = createFileRoute('/admin/settings')({
 })
 
 function AdminSettingsPage() {
-  const { user, timezone: initialTimezone, timezoneOptions } = Route.useLoaderData()
+  const { timezone: initialTimezone, timezoneOptions } = Route.useLoaderData()
   const [timezone, setTimezone] = useState(initialTimezone)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -49,8 +47,6 @@ function AdminSettingsPage() {
 
   return (
     <div>
-      <Header user={user} />
-
       <main className="main">
         <div className="container">
           <h1 className="mb-3">Admin Settings</h1>

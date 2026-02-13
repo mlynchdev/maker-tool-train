@@ -1,13 +1,15 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { getAuthUser, requireAuth } from '~/server/auth/middleware'
+import { Badge } from '~/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
+import { Progress } from '~/components/ui/progress'
+import { requireAuth } from '~/server/auth/middleware'
 import { getAllModulesWithProgress } from '~/server/services/training'
-import { Header } from '~/components/Header'
 
 const getTrainingData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireAuth()
   const modules = await getAllModulesWithProgress(user.id)
-  return { user, modules }
+  return { modules }
 })
 
 export const Route = createFileRoute('/training/')({
@@ -18,80 +20,114 @@ export const Route = createFileRoute('/training/')({
 })
 
 function TrainingPage() {
-  const { user, modules } = Route.useLoaderData()
+  const { modules } = Route.useLoaderData()
 
-  const completedCount = modules.filter((m) => m.completedAt).length
+  const completedModules = modules.filter((module) => Boolean(module.completedAt))
+  const incompleteModules = modules
+    .filter((module) => !module.completedAt)
+    .sort((a, b) => b.percentComplete - a.percentComplete)
+
+  const completedCount = completedModules.length
   const totalCount = modules.length
   const overallPercent = totalCount > 0 ? Math.floor((completedCount / totalCount) * 100) : 0
 
+  const renderModuleCard = (module: (typeof modules)[number]) => (
+    <Link
+      key={module.id}
+      to="/training/$moduleId"
+      params={{ moduleId: module.id }}
+      className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Card className="h-full transition-shadow hover:shadow-md">
+        <CardHeader className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <CardTitle className="text-lg">{module.title}</CardTitle>
+            {module.completedAt ? (
+              <Badge variant="success">Complete</Badge>
+            ) : module.percentComplete > 0 ? (
+              <Badge variant="warning">{module.percentComplete}%</Badge>
+            ) : (
+              <Badge variant="info">Not started</Badge>
+            )}
+          </div>
+          {module.description && <CardDescription>{module.description}</CardDescription>}
+        </CardHeader>
+
+        <CardContent className="space-y-3 pt-0">
+          <Progress
+            value={module.percentComplete}
+            indicatorClassName={module.completedAt ? 'bg-emerald-500' : ''}
+          />
+          <p className="text-sm text-muted-foreground">{Math.floor(module.durationSeconds / 60)} min video</p>
+        </CardContent>
+      </Card>
+    </Link>
+  )
+
   return (
-    <div>
-      <Header user={user} />
+    <div className="min-h-screen">
+      <main className="container space-y-8 py-6 md:py-8">
+        <section>
+          <h1 className="text-3xl font-semibold tracking-tight">Training</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Modules are grouped by next actions so it is easier to continue where you left off.
+          </p>
+        </section>
 
-      <main className="main">
-        <div className="container">
-          <div className="flex flex-between flex-center mb-3">
-            <h1>Training Modules</h1>
-            <span className="badge badge-info">
-              {completedCount} / {totalCount} completed
-            </span>
+        <section className="grid gap-4 sm:grid-cols-3">
+          <Card className="sm:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-base">Overall Progress</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Completion</span>
+                <span className="font-medium">{overallPercent}%</span>
+              </div>
+              <Progress value={overallPercent} indicatorClassName={overallPercent === 100 ? 'bg-emerald-500' : ''} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Completed modules</CardDescription>
+              <CardTitle className="text-2xl">
+                {completedCount} / {totalCount}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Next up</h2>
+            <Badge variant="warning">{incompleteModules.length}</Badge>
           </div>
 
-          <div className="card mb-3">
-            <div className="flex flex-between flex-center mb-1">
-              <span className="text-small text-muted">Overall Progress</span>
-              <span className="text-small">{overallPercent}%</span>
+          {incompleteModules.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {incompleteModules.map(renderModuleCard)}
             </div>
-            <div className="progress">
-              <div
-                className={`progress-bar ${overallPercent === 100 ? 'complete' : ''}`}
-                style={{ width: `${overallPercent}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-2">
-            {modules.map((module) => (
-              <Link
-                key={module.id}
-                to="/training/$moduleId"
-                params={{ moduleId: module.id }}
-                className="card"
-                style={{ textDecoration: 'none', color: 'inherit' }}
-              >
-                <div className="card-header">
-                  <h3 className="card-title">{module.title}</h3>
-                  {module.completedAt ? (
-                    <span className="badge badge-success">Complete</span>
-                  ) : (
-                    <span className="badge badge-warning">{module.percentComplete}%</span>
-                  )}
-                </div>
-
-                {module.description && (
-                  <p className="text-muted text-small mb-2">{module.description}</p>
-                )}
-
-                <div className="progress">
-                  <div
-                    className={`progress-bar ${module.completedAt ? 'complete' : ''}`}
-                    style={{ width: `${module.percentComplete}%` }}
-                  />
-                </div>
-
-                <p className="text-small text-muted mt-1">
-                  {Math.floor(module.durationSeconds / 60)} min video
-                </p>
-              </Link>
-            ))}
-          </div>
-
-          {modules.length === 0 && (
-            <div className="card">
-              <p className="text-center text-muted">No training modules available.</p>
-            </div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                You have completed all training modules.
+              </CardContent>
+            </Card>
           )}
-        </div>
+        </section>
+
+        {completedModules.length > 0 && (
+          <section>
+            <div className="mb-3 flex items-center gap-2">
+              <h2 className="text-xl font-semibold tracking-tight">Completed</h2>
+              <Badge variant="success">{completedModules.length}</Badge>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {completedModules.map(renderModuleCard)}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   )

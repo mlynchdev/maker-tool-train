@@ -1,11 +1,16 @@
 import { Outlet, createFileRoute, Link, useChildMatches } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
-import { useState } from 'react'
+import { Plus, Search, Wrench } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
-import { db, machines, trainingModules } from '~/lib/db'
-import { Header } from '~/components/Header'
-import { createMachine, updateMachine, setMachineRequirements } from '~/server/api/admin'
+import { db, machines } from '~/lib/db'
+import { createMachine, updateMachine } from '~/server/api/admin'
+import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
+import { Input } from '~/components/ui/input'
+import { Label } from '~/components/ui/label'
 
 const TRAINING_DURATION_OPTIONS = [
   { value: 15, label: '15 minutes' },
@@ -28,11 +33,7 @@ const getAdminMachinesData = createServerFn({ method: 'GET' }).handler(async () 
     orderBy: [asc(machines.name)],
   })
 
-  const moduleList = await db.query.trainingModules.findMany({
-    orderBy: [asc(trainingModules.title)],
-  })
-
-  return { user, machines: machineList, modules: moduleList }
+  return { user, machines: machineList }
 })
 
 export const Route = createFileRoute('/admin/machines')({
@@ -44,19 +45,42 @@ export const Route = createFileRoute('/admin/machines')({
 
 function AdminMachinesPage() {
   const childMatches = useChildMatches()
-  const { user, machines: initialMachines, modules } = Route.useLoaderData()
+  const { user, machines: initialMachines } = Route.useLoaderData()
   const [machineList, setMachineList] = useState(initialMachines)
   const [showCreate, setShowCreate] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [machineQuery, setMachineQuery] = useState('')
 
-  // Create form state
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
   const [newResourceType, setNewResourceType] = useState<'machine' | 'tool'>(
     'machine'
   )
   const [newTrainingDurationMinutes, setNewTrainingDurationMinutes] = useState(30)
+
+  const normalizedQuery = machineQuery.trim().toLowerCase()
+
+  const filteredMachines = useMemo(() => {
+    if (!normalizedQuery) return machineList
+
+    return machineList.filter((machine) => {
+      const name = machine.name.toLowerCase()
+      const description = (machine.description || '').toLowerCase()
+      const type = machine.resourceType.toLowerCase()
+      return (
+        name.includes(normalizedQuery) ||
+        description.includes(normalizedQuery) ||
+        type.includes(normalizedQuery)
+      )
+    })
+  }, [machineList, normalizedQuery])
+
+  const activeMachines = filteredMachines.filter((machine) => machine.active)
+  const inactiveMachines = filteredMachines.filter((machine) => !machine.active)
+
+  if (childMatches.length > 0) {
+    return <Outlet />
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -80,7 +104,7 @@ function AdminMachinesPage() {
         setNewTrainingDurationMinutes(30)
         setShowCreate(false)
       }
-    } catch (error) {
+    } catch {
       alert('Failed to create machine')
     } finally {
       setSaving(false)
@@ -98,82 +122,171 @@ function AdminMachinesPage() {
           prev.map((m) => (m.id === machineId ? { ...m, active } : m))
         )
       }
-    } catch (error) {
+    } catch {
       alert('Failed to update machine')
     }
   }
 
-  if (childMatches.length > 0) {
-    return <Outlet />
-  }
+  const selectClassName =
+    'h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+
+  const renderMachineCard = (machine: (typeof machineList)[number]) => (
+    <Card key={machine.id}>
+      <CardHeader className="space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-lg">{machine.name}</CardTitle>
+            {machine.description && (
+              <CardDescription className="mt-1">{machine.description}</CardDescription>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline" className="capitalize">
+              {machine.resourceType}
+            </Badge>
+            <Badge variant={machine.active ? 'success' : 'destructive'}>
+              {machine.active ? 'Active' : 'Inactive'}
+            </Badge>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Final checkout duration: {machine.trainingDurationMinutes === 60 ? '1 hour' : `${machine.trainingDurationMinutes} minutes`}
+        </p>
+
+        <div>
+          <p className="mb-2 text-sm font-medium">Training requirements</p>
+          {machine.requirements.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {machine.requirements.map((req) => (
+                <Badge key={req.id} variant="secondary">
+                  {req.module.title} ({req.requiredWatchPercent}%)
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No requirements configured.</p>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/admin/machines/$machineId" params={{ machineId: machine.id }}>
+              Edit details
+            </Link>
+          </Button>
+          <Button
+            variant={machine.active ? 'destructive' : 'default'}
+            size="sm"
+            onClick={() => handleToggleActive(machine.id, !machine.active)}
+          >
+            {machine.active ? 'Deactivate' : 'Activate'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
 
   return (
-    <div>
-      <Header user={user} />
-
-      <main className="main">
-        <div className="container">
-          <div
-            className="flex flex-between flex-center mb-3"
-            style={{ flexWrap: 'wrap', gap: '0.75rem' }}
-          >
-            <h1>Manage Machines</h1>
-            <div className="action-row">
-              {user.role === 'admin' && (
-                <Link to="/admin/training" className="btn btn-secondary">
-                  Manage Training
-                </Link>
-              )}
-              <button
-                className="btn btn-primary"
-                onClick={() => setShowCreate(!showCreate)}
-              >
-                {showCreate ? 'Cancel' : 'Add Machine'}
-              </button>
-            </div>
+    <div className="min-h-screen">
+      <main className="container space-y-8 py-6 md:py-8">
+        <section className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Machine Administration</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Configure resources, activation state, and requirements in one streamlined workspace.
+            </p>
           </div>
+          <div className="flex flex-wrap gap-2">
+            {user.role === 'admin' && (
+              <Button asChild variant="outline">
+                <Link to="/admin/training">Manage training modules</Link>
+              </Button>
+            )}
+            <Button onClick={() => setShowCreate((prev) => !prev)}>
+              <Plus className="mr-2 h-4 w-4" />
+              {showCreate ? 'Close form' : 'Add machine'}
+            </Button>
+          </div>
+        </section>
 
-          {/* Create Form */}
-          {showCreate && (
-            <div className="card mb-3">
-              <h3 className="card-title mb-2">New Machine</h3>
-              <form onSubmit={handleCreate}>
-                <div className="form-group">
-                  <label className="form-label">Name</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    required
-                  />
+        <section className="grid gap-4 sm:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Total resources</CardDescription>
+              <CardTitle className="text-2xl">{machineList.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Active</CardDescription>
+              <CardTitle className="text-2xl">{machineList.filter((machine) => machine.active).length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>With requirements</CardDescription>
+              <CardTitle className="text-2xl">
+                {machineList.filter((machine) => machine.requirements.length > 0).length}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+        </section>
+
+        {showCreate && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Create new resource</CardTitle>
+              <CardDescription>Choose the resource type and default checkout duration.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleCreate} className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="machine-name">Name</Label>
+                    <Input
+                      id="machine-name"
+                      type="text"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="machine-type">Type</Label>
+                    <select
+                      id="machine-type"
+                      className={selectClassName}
+                      value={newResourceType}
+                      onChange={(e) =>
+                        setNewResourceType(e.target.value as 'machine' | 'tool')
+                      }
+                    >
+                      <option value="machine">Machine</option>
+                      <option value="tool">Tool</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Description</label>
-                  <input
+
+                <div className="space-y-2">
+                  <Label htmlFor="machine-description">Description</Label>
+                  <Input
+                    id="machine-description"
                     type="text"
-                    className="form-input"
                     value={newDescription}
                     onChange={(e) => setNewDescription(e.target.value)}
+                    placeholder="Short summary of this resource"
                   />
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Type</label>
+
+                <div className="space-y-2">
+                  <Label htmlFor="machine-duration">Training duration</Label>
                   <select
-                    className="form-input"
-                    value={newResourceType}
-                    onChange={(e) =>
-                      setNewResourceType(e.target.value as 'machine' | 'tool')
-                    }
-                  >
-                    <option value="machine">Machine</option>
-                    <option value="tool">Tool</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Training Duration</label>
-                  <select
-                    className="form-input"
+                    id="machine-duration"
+                    className={selectClassName}
                     value={newTrainingDurationMinutes}
                     onChange={(e) => setNewTrainingDurationMinutes(Number(e.target.value))}
                   >
@@ -184,81 +297,80 @@ function AdminMachinesPage() {
                     ))}
                   </select>
                 </div>
-                <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving ? 'Creating...' : 'Create Machine'}
-                </button>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={saving}>
+                    {saving ? 'Creating...' : 'Create resource'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setShowCreate(false)}>
+                    Cancel
+                  </Button>
+                </div>
               </form>
-            </div>
-          )}
+            </CardContent>
+          </Card>
+        )}
 
-          {/* Machine List */}
-          <div className="grid grid-2">
-            {machineList.map((machine) => (
-              <div key={machine.id} className="card">
-                <div className="card-header">
-                  <h3 className="card-title">{machine.name}</h3>
-                  <div className="action-row">
-                    <span className="badge badge-info" style={{ textTransform: 'capitalize' }}>
-                      {machine.resourceType}
-                    </span>
-                    <span
-                      className={`badge ${machine.active ? 'badge-success' : 'badge-danger'}`}
-                    >
-                      {machine.active ? 'Active' : 'Inactive'}
-                    </span>
-                  </div>
-                </div>
-
-                {machine.description && (
-                  <p className="text-small text-muted mb-2">{machine.description}</p>
-                )}
-
-                <p className="text-small text-muted mb-2">
-                  Final checkout duration: {machine.trainingDurationMinutes} minutes
-                </p>
-
-                <div className="mb-2">
-                  <strong className="text-small">Training Requirements:</strong>
-                  {machine.requirements.length > 0 ? (
-                    <ul className="eligibility-list">
-                      {machine.requirements.map((req) => (
-                        <li key={req.id} className="eligibility-item">
-                          <span className="text-small">
-                            {req.module.title} ({req.requiredWatchPercent}%)
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-small text-muted">No requirements</p>
-                  )}
-                </div>
-
-                <div className="action-row">
-                  <Link
-                    to="/admin/machines/$machineId"
-                    params={{ machineId: machine.id }}
-                    className="btn btn-secondary"
-                  >
-                    Edit
-                  </Link>
-                  <button
-                    className={`btn ${machine.active ? 'btn-danger' : 'btn-success'}`}
-                    onClick={() => handleToggleActive(machine.id, !machine.active)}
-                  >
-                    {machine.active ? 'Deactivate' : 'Activate'}
-                  </button>
-                </div>
+        <Card>
+          <CardHeader className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">Resources</CardTitle>
+                <CardDescription>Search by name, description, or type.</CardDescription>
               </div>
-            ))}
-          </div>
-
-          {machineList.length === 0 && (
-            <div className="card">
-              <p className="text-center text-muted">No machines configured.</p>
+              <div className="relative w-full max-w-sm">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={machineQuery}
+                  onChange={(e) => setMachineQuery(e.target.value)}
+                  placeholder="Search resources"
+                  className="pl-9"
+                />
+              </div>
             </div>
+          </CardHeader>
+        </Card>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Active</h2>
+            <Badge variant="success">{activeMachines.length}</Badge>
+          </div>
+          {activeMachines.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">{activeMachines.map(renderMachineCard)}</div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                No active resources match your search.
+              </CardContent>
+            </Card>
           )}
-        </div>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Inactive</h2>
+            <Badge variant="destructive">{inactiveMachines.length}</Badge>
+          </div>
+          {inactiveMachines.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">{inactiveMachines.map(renderMachineCard)}</div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                No inactive resources match your search.
+              </CardContent>
+            </Card>
+          )}
+        </section>
+
+        <Card>
+          <CardContent className="flex items-center gap-3 pt-6">
+            <Wrench className="h-5 w-5 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              Keep resource descriptions concise so members can quickly identify the correct machine.
+            </p>
+          </CardContent>
+        </Card>
       </main>
     </div>
   )

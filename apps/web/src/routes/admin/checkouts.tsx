@@ -8,7 +8,6 @@ import { checkEligibility } from '~/server/services/eligibility'
 import { getAdminCheckoutAvailability } from '~/server/services/checkout-scheduling'
 import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
 import { getNotificationsForUser } from '~/server/services/notifications'
-import { Header } from '~/components/Header'
 import {
   approveCheckout,
   cancelCheckoutAppointment,
@@ -332,8 +331,6 @@ function CheckoutsPage() {
 
   return (
     <div>
-      <Header user={user} />
-
       <main className="main">
         <div className="container">
           <h1 className="mb-3">Checkout Approvals</h1>
