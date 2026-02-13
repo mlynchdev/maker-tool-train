@@ -8,6 +8,8 @@ import {
   getPendingReservationRequestCount,
 } from '~/server/api/admin'
 import { parseSSEMessage } from '~/lib/sse'
+import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
 
 interface HeaderProps {
   user: AuthUser
@@ -74,35 +76,40 @@ export function Header({ user }: HeaderProps) {
     navigate({ to: '/' })
   }
 
+  const navLinkClass =
+    'inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground'
+
   return (
-    <header className="header">
-      <div className="container header-inner">
-        <Link to="/" className="logo">
+    <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="container flex flex-wrap items-center justify-between gap-3 py-4">
+        <Link to="/" className="text-lg font-semibold tracking-tight">
           Training System
         </Link>
 
-        <nav className="nav">
-          <Link to="/training">Training</Link>
-          <Link to="/machines">Machines</Link>
-          <Link to="/reservations">Reservations</Link>
+        <nav className="flex flex-wrap items-center gap-2 md:gap-4">
+          <Link to="/training" className={navLinkClass}>Training</Link>
+          <Link to="/machines" className={navLinkClass}>Machines</Link>
+          <Link to="/reservations" className={navLinkClass}>Reservations</Link>
 
           {(user.role === 'manager' || user.role === 'admin') && (
-            <Link to="/admin/machines">Resources</Link>
+            <Link to="/admin/machines" className={navLinkClass}>Resources</Link>
           )}
 
           {(user.role === 'manager' || user.role === 'admin') && (
-            <Link to="/admin/users">Users</Link>
+            <Link to="/admin/users" className={navLinkClass}>Users</Link>
           )}
 
-          {user.role === 'admin' && <Link to="/admin/training">Training Admin</Link>}
+          {user.role === 'admin' && (
+            <Link to="/admin/training" className={navLinkClass}>Training Admin</Link>
+          )}
 
           {(user.role === 'manager' || user.role === 'admin') && (
-            <Link to="/admin/checkouts" style={{ position: 'relative' }}>
+            <Link to="/admin/checkouts" className={navLinkClass}>
               Checkouts
               {pendingCheckoutCount > 0 && (
-                <span className="badge badge-warning" style={{ marginLeft: '0.35rem' }}>
+                <Badge variant="warning" className="ml-1">
                   {pendingCheckoutCount}
-                </span>
+                </Badge>
               )}
             </Link>
           )}
@@ -111,27 +118,29 @@ export function Header({ user }: HeaderProps) {
             <Link
               to="/admin/booking-requests"
               search={{ view: 'pending', q: '' }}
-              style={{ position: 'relative' }}
+              className={navLinkClass}
             >
               Booking Requests
               {pendingRequestCount > 0 && (
-                <span className="badge badge-warning" style={{ marginLeft: '0.35rem' }}>
+                <Badge variant="warning" className="ml-1">
                   {pendingRequestCount}
-                </span>
+                </Badge>
               )}
             </Link>
           )}
 
-          {user.role === 'admin' && <Link to="/admin/settings">Settings</Link>}
-
-          {unreadNotifications > 0 && (
-            <span className="badge badge-info">{unreadNotifications} alerts</span>
+          {user.role === 'admin' && (
+            <Link to="/admin/settings" className={navLinkClass}>Settings</Link>
           )}
 
-          <span className="text-muted text-small">{user.email}</span>
-          <button onClick={handleLogout} className="btn btn-secondary">
+          {unreadNotifications > 0 && (
+            <Badge variant="info">{unreadNotifications} alerts</Badge>
+          )}
+
+          <span className="text-xs text-muted-foreground">{user.email}</span>
+          <Button onClick={handleLogout} variant="secondary" size="sm">
             Logout
-          </button>
+          </Button>
         </nav>
       </div>
     </header>

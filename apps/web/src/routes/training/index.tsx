@@ -1,8 +1,11 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { getAuthUser, requireAuth } from '~/server/auth/middleware'
-import { getAllModulesWithProgress } from '~/server/services/training'
 import { Header } from '~/components/Header'
+import { Badge } from '~/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
+import { Progress } from '~/components/ui/progress'
+import { requireAuth } from '~/server/auth/middleware'
+import { getAllModulesWithProgress } from '~/server/services/training'
 
 const getTrainingData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireAuth()
@@ -20,78 +23,79 @@ export const Route = createFileRoute('/training/')({
 function TrainingPage() {
   const { user, modules } = Route.useLoaderData()
 
-  const completedCount = modules.filter((m) => m.completedAt).length
+  const completedCount = modules.filter((module) => module.completedAt).length
   const totalCount = modules.length
   const overallPercent = totalCount > 0 ? Math.floor((completedCount / totalCount) * 100) : 0
 
   return (
-    <div>
+    <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="main">
-        <div className="container">
-          <div className="flex flex-between flex-center mb-3">
-            <h1>Training Modules</h1>
-            <span className="badge badge-info">
-              {completedCount} / {totalCount} completed
-            </span>
-          </div>
-
-          <div className="card mb-3">
-            <div className="flex flex-between flex-center mb-1">
-              <span className="text-small text-muted">Overall Progress</span>
-              <span className="text-small">{overallPercent}%</span>
-            </div>
-            <div className="progress">
-              <div
-                className={`progress-bar ${overallPercent === 100 ? 'complete' : ''}`}
-                style={{ width: `${overallPercent}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-2">
-            {modules.map((module) => (
-              <Link
-                key={module.id}
-                to="/training/$moduleId"
-                params={{ moduleId: module.id }}
-                className="card"
-                style={{ textDecoration: 'none', color: 'inherit' }}
-              >
-                <div className="card-header">
-                  <h3 className="card-title">{module.title}</h3>
-                  {module.completedAt ? (
-                    <span className="badge badge-success">Complete</span>
-                  ) : (
-                    <span className="badge badge-warning">{module.percentComplete}%</span>
-                  )}
-                </div>
-
-                {module.description && (
-                  <p className="text-muted text-small mb-2">{module.description}</p>
-                )}
-
-                <div className="progress">
-                  <div
-                    className={`progress-bar ${module.completedAt ? 'complete' : ''}`}
-                    style={{ width: `${module.percentComplete}%` }}
-                  />
-                </div>
-
-                <p className="text-small text-muted mt-1">
-                  {Math.floor(module.durationSeconds / 60)} min video
-                </p>
-              </Link>
-            ))}
-          </div>
-
-          {modules.length === 0 && (
-            <div className="card">
-              <p className="text-center text-muted">No training modules available.</p>
-            </div>
-          )}
+      <main className="container py-8">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight">Training Modules</h1>
+          <Badge variant="info">
+            {completedCount} / {totalCount} completed
+          </Badge>
         </div>
+
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-base">Overall Progress</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Completion</span>
+              <span className="font-medium">{overallPercent}%</span>
+            </div>
+            <Progress value={overallPercent} indicatorClassName={overallPercent === 100 ? 'bg-emerald-500' : ''} />
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {modules.map((module) => (
+            <Link
+              key={module.id}
+              to="/training/$moduleId"
+              params={{ moduleId: module.id }}
+              className="block rounded-xl transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Card className="h-full">
+                <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-3">
+                  <CardTitle className="text-lg">{module.title}</CardTitle>
+                  {module.completedAt ? (
+                    <Badge variant="success">Complete</Badge>
+                  ) : (
+                    <Badge variant="warning">{module.percentComplete}%</Badge>
+                  )}
+                </CardHeader>
+
+                <CardContent className="space-y-4">
+                  {module.description && (
+                    <CardDescription>{module.description}</CardDescription>
+                  )}
+
+                  <Progress
+                    value={module.percentComplete}
+                    indicatorClassName={module.completedAt ? 'bg-emerald-500' : ''}
+                  />
+
+                  <p className="text-sm text-muted-foreground">
+                    {Math.floor(module.durationSeconds / 60)} min video
+                  </p>
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
+        </div>
+
+        {modules.length === 0 && (
+          <Card className="mt-4">
+            <CardContent className="py-8 text-center text-muted-foreground">
+              No training modules available.
+            </CardContent>
+          </Card>
+        )}
       </main>
     </div>
   )

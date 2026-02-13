@@ -1,6 +1,11 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { login } from '~/server/api/auth'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
+import { Input } from '~/components/ui/input'
+import { Label } from '~/components/ui/label'
+import { Alert, AlertDescription } from '~/components/ui/alert'
 
 export const Route = createFileRoute('/login')({
   component: LoginPage,
@@ -19,9 +24,7 @@ function LoginPage() {
     setLoading(true)
 
     try {
-      console.log('Calling login with:', { email, password })
       const result = await login({ data: { email, password } })
-      console.log('Login result:', result)
 
       if (result.success) {
         navigate({ to: '/' })
@@ -37,60 +40,68 @@ function LoginPage() {
   }
 
   return (
-    <div className="landing">
-      <header className="header">
-        <div className="container header-inner">
-          <a href="/" className="logo">
+    <div className="min-h-screen bg-gradient-to-b from-background via-background to-slate-100/70">
+      <header className="border-b bg-background/95 backdrop-blur">
+        <div className="container flex items-center py-4">
+          <a href="/" className="text-lg font-semibold tracking-tight">
             Training System
           </a>
         </div>
       </header>
 
-      <div className="hero">
-        <div className="card" style={{ width: '100%', maxWidth: '400px' }}>
-          <h2 className="mb-2">Sign In</h2>
+      <main className="container flex min-h-[calc(100vh-73px)] items-center justify-center py-12">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Sign In</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
 
-          {error && <div className="alert alert-danger">{error}</div>}
-
-          <form onSubmit={handleSubmit}>
-            <div className="form-group">
-              <label htmlFor="email" className="form-label">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">
                 Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                className="form-input"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
 
-            <div className="form-group">
-              <label htmlFor="password" className="form-label">
+              <div className="space-y-2">
+                <Label htmlFor="password">
                 Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                className="form-input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
 
-            <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%' }}>
-              {loading ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? 'Signing in...' : 'Sign In'}
+              </Button>
+            </form>
 
-          <p className="text-center mt-2 text-small">
-            Don't have an account? <a href="/register">Register</a>
-          </p>
-        </div>
-      </div>
+            <p className="mt-4 text-center text-sm text-muted-foreground">
+              Don&apos;t have an account?{' '}
+              <a href="/register" className="font-medium text-primary hover:underline">
+                Register
+              </a>
+            </p>
+          </CardContent>
+        </Card>
+      </main>
     </div>
   )
 }

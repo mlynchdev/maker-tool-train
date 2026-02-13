@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import appStylesHref from '../styles.css?url'
+import { Button } from '~/components/ui/button'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -35,12 +36,12 @@ function RootComponent() {
 function NotFoundComponent() {
   return (
     <RootDocument>
-      <div className="container" style={{ textAlign: 'center', padding: '4rem 1rem' }}>
-        <h1>404 - Page Not Found</h1>
-        <p className="text-muted">The page you're looking for doesn't exist.</p>
-        <Link to="/" className="btn btn-primary" style={{ marginTop: '1rem' }}>
-          Go Home
-        </Link>
+      <div className="container py-20 text-center">
+        <h1 className="text-3xl font-semibold tracking-tight">404 - Page Not Found</h1>
+        <p className="mt-2 text-muted-foreground">The page you&apos;re looking for doesn&apos;t exist.</p>
+        <Button asChild className="mt-6">
+          <Link to="/">Go Home</Link>
+        </Button>
       </div>
     </RootDocument>
   )

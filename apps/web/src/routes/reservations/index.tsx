@@ -1,12 +1,23 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { eq, desc } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { useCallback, useEffect, useState } from 'react'
-import { requireAuth } from '~/server/auth/middleware'
-import { db, reservations } from '~/lib/db'
 import { Header } from '~/components/Header'
-import { cancelReservation } from '~/server/api/reservations'
+import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '~/components/ui/table'
+import { db, reservations } from '~/lib/db'
 import { parseSSEMessage } from '~/lib/sse'
+import { requireAuth } from '~/server/auth/middleware'
+import { cancelReservation } from '~/server/api/reservations'
 
 const getReservationsData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireAuth()
@@ -50,13 +61,13 @@ function ReservationsPage() {
     })
   }
 
-  const getStatusBadgeClass = (status: string) => {
+  const getStatusVariant = (status: string): 'success' | 'warning' | 'destructive' | 'info' => {
     if (status === 'approved' || status === 'confirmed' || status === 'completed') {
-      return 'badge-success'
+      return 'success'
     }
-    if (status === 'pending') return 'badge-warning'
-    if (status === 'cancelled' || status === 'rejected') return 'badge-danger'
-    return 'badge-info'
+    if (status === 'pending') return 'warning'
+    if (status === 'cancelled' || status === 'rejected') return 'destructive'
+    return 'info'
   }
 
   const handleCancel = async (reservationId: string) => {
@@ -69,8 +80,8 @@ function ReservationsPage() {
 
       if (result.success) {
         setReservationsList((prev) =>
-          prev.map((r) =>
-            r.id === reservationId ? { ...r, status: 'cancelled' as const } : r
+          prev.map((reservation) =>
+            reservation.id === reservationId ? { ...reservation, status: 'cancelled' as const } : reservation
           )
         )
       } else {
@@ -108,106 +119,104 @@ function ReservationsPage() {
   }, [refreshReservations])
 
   const upcomingReservations = reservationsList.filter(
-    (r) => activeStatuses.includes(r.status) && new Date(r.startTime) > new Date()
+    (reservation) => activeStatuses.includes(reservation.status) && new Date(reservation.startTime) > new Date()
   )
 
   const pastReservations = reservationsList.filter(
-    (r) => !activeStatuses.includes(r.status) || new Date(r.startTime) <= new Date()
+    (reservation) => !activeStatuses.includes(reservation.status) || new Date(reservation.startTime) <= new Date()
   )
 
   return (
-    <div>
+    <div className="min-h-screen">
       <Header user={user} />
 
-      <main className="main">
-        <div className="container">
-          <div className="flex flex-between flex-center mb-3">
-            <h1>My Reservations</h1>
-            <Link to="/machines" className="btn btn-primary">
-              New Reservation
-            </Link>
-          </div>
+      <main className="container py-8">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight">My Reservations</h1>
+          <Button asChild>
+            <Link to="/machines">New Reservation</Link>
+          </Button>
+        </div>
 
-          {/* Upcoming Reservations */}
-          <h2 className="mb-2">Upcoming</h2>
+        <section className="mb-8">
+          <h2 className="mb-3 text-xl font-semibold tracking-tight">Upcoming</h2>
           {upcomingReservations.length > 0 ? (
-            <div className="grid grid-2 mb-3">
+            <div className="grid gap-4 md:grid-cols-2">
               {upcomingReservations.map((reservation) => (
-                <div key={reservation.id} className="card">
-                  <div className="card-header">
-                    <h3 className="card-title">{reservation.machine.name}</h3>
-                    <span className={`badge ${getStatusBadgeClass(reservation.status)}`}>
+                <Card key={reservation.id}>
+                  <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-3">
+                    <CardTitle className="text-lg">{reservation.machine.name}</CardTitle>
+                    <Badge variant={getStatusVariant(reservation.status)} className="capitalize">
                       {reservation.status}
-                    </span>
-                  </div>
+                    </Badge>
+                  </CardHeader>
 
-                  <p className="text-small mb-1">
-                    <strong>Start:</strong> {formatDateTime(reservation.startTime)}
-                  </p>
-                  <p className="text-small mb-2">
-                    <strong>End:</strong> {formatDateTime(reservation.endTime)}
-                  </p>
+                  <CardContent>
+                    <p className="mb-1 text-sm">
+                      <span className="font-medium">Start:</span> {formatDateTime(reservation.startTime)}
+                    </p>
+                    <p className="mb-4 text-sm">
+                      <span className="font-medium">End:</span> {formatDateTime(reservation.endTime)}
+                    </p>
 
-                  {(reservation.status === 'pending' ||
-                    reservation.status === 'approved' ||
-                    reservation.status === 'confirmed') && (
-                    <button
-                      className="btn btn-danger"
-                      onClick={() => handleCancel(reservation.id)}
-                      disabled={cancelling === reservation.id}
-                    >
-                      {cancelling === reservation.id ? 'Cancelling...' : 'Cancel'}
-                    </button>
-                  )}
-                </div>
+                    {(reservation.status === 'pending' ||
+                      reservation.status === 'approved' ||
+                      reservation.status === 'confirmed') && (
+                      <Button
+                        variant="destructive"
+                        onClick={() => handleCancel(reservation.id)}
+                        disabled={cancelling === reservation.id}
+                      >
+                        {cancelling === reservation.id ? 'Cancelling...' : 'Cancel'}
+                      </Button>
+                    )}
+                  </CardContent>
+                </Card>
               ))}
             </div>
           ) : (
-            <div className="card mb-3">
-              <p className="text-center text-muted">No upcoming reservations.</p>
-              <div className="text-center mt-2">
-                <Link to="/machines" className="btn btn-primary">
-                  Browse Machines
-                </Link>
-              </div>
-            </div>
+            <Card>
+              <CardContent className="py-8 text-center">
+                <p className="text-muted-foreground">No upcoming reservations.</p>
+                <Button asChild className="mt-4">
+                  <Link to="/machines">Browse Machines</Link>
+                </Button>
+              </CardContent>
+            </Card>
           )}
+        </section>
 
-          {/* Past / Cancelled Reservations */}
-          {pastReservations.length > 0 && (
-            <>
-              <h2 className="mb-2">Past & Cancelled</h2>
-              <div className="card">
-                <div className="table-wrapper">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Machine</th>
-                        <th>Date</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pastReservations.map((reservation) => (
-                        <tr key={reservation.id}>
-                          <td>{reservation.machine.name}</td>
-                          <td className="text-small">
-                            {formatDateTime(reservation.startTime)}
-                          </td>
-                          <td>
-                            <span className={`badge ${getStatusBadgeClass(reservation.status)}`}>
-                              {reservation.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        {pastReservations.length > 0 && (
+          <section>
+            <h2 className="mb-3 text-xl font-semibold tracking-tight">Past & Cancelled</h2>
+            <Card>
+              <CardContent className="pt-6">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Machine</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pastReservations.map((reservation) => (
+                      <TableRow key={reservation.id}>
+                        <TableCell className="font-medium">{reservation.machine.name}</TableCell>
+                        <TableCell>{formatDateTime(reservation.startTime)}</TableCell>
+                        <TableCell>
+                          <Badge variant={getStatusVariant(reservation.status)} className="capitalize">
+                            {reservation.status}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </section>
+        )}
       </main>
     </div>
   )
