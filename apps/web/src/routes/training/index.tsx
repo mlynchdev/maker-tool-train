@@ -1,6 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { Header } from '~/components/Header'
 import { Badge } from '~/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { Progress } from '~/components/ui/progress'
@@ -10,7 +9,7 @@ import { getAllModulesWithProgress } from '~/server/services/training'
 const getTrainingData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireAuth()
   const modules = await getAllModulesWithProgress(user.id)
-  return { user, modules }
+  return { modules }
 })
 
 export const Route = createFileRoute('/training/')({
@@ -21,7 +20,7 @@ export const Route = createFileRoute('/training/')({
 })
 
 function TrainingPage() {
-  const { user, modules } = Route.useLoaderData()
+  const { modules } = Route.useLoaderData()
 
   const completedModules = modules.filter((module) => Boolean(module.completedAt))
   const incompleteModules = modules
@@ -67,8 +66,6 @@ function TrainingPage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-8 py-6 md:py-8">
         <section>
           <h1 className="text-3xl font-semibold tracking-tight">Training</h1>

@@ -4,10 +4,38 @@ import {
   Outlet,
   Scripts,
   createRootRoute,
+  useLocation,
 } from '@tanstack/react-router'
+import { createServerFn } from '@tanstack/react-start'
 import type { ReactNode } from 'react'
 import appStylesHref from '../styles.css?url'
+import { AppShell } from '~/components/layout/AppShell'
 import { Button } from '~/components/ui/button'
+import { getAuthUser } from '~/server/auth/middleware'
+
+const getRootUser = createServerFn({ method: 'GET' }).handler(async () => {
+  return await getAuthUser()
+})
+
+function normalizePath(pathname: string) {
+  if (pathname !== '/' && pathname.endsWith('/')) {
+    return pathname.slice(0, -1)
+  }
+  return pathname
+}
+
+function isAuthenticatedShellPath(pathname: string) {
+  const normalizedPath = normalizePath(pathname)
+
+  if (normalizedPath === '/') return true
+
+  return (
+    normalizedPath.startsWith('/training') ||
+    normalizedPath.startsWith('/machines') ||
+    normalizedPath.startsWith('/reservations') ||
+    normalizedPath.startsWith('/admin')
+  )
+}
 
 export const Route = createRootRoute({
   head: () => ({
@@ -21,14 +49,30 @@ export const Route = createRootRoute({
       { rel: 'stylesheet', href: appStylesHref },
     ],
   }),
+  loader: async () => {
+    return {
+      user: await getRootUser(),
+    }
+  },
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
 })
 
 function RootComponent() {
+  const { user } = Route.useLoaderData()
+  const location = useLocation()
+
+  const shouldRenderShell = Boolean(user) && isAuthenticatedShellPath(location.pathname)
+
   return (
     <RootDocument>
-      <Outlet />
+      {shouldRenderShell ? (
+        <AppShell user={user!} pathname={location.pathname}>
+          <Outlet />
+        </AppShell>
+      ) : (
+        <Outlet />
+      )}
     </RootDocument>
   )
 }

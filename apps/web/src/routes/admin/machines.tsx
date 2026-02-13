@@ -5,7 +5,6 @@ import { Plus, Search, Wrench } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
 import { db, machines } from '~/lib/db'
-import { Header } from '~/components/Header'
 import { createMachine, updateMachine } from '~/server/api/admin'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
@@ -192,8 +191,6 @@ function AdminMachinesPage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-8 py-6 md:py-8">
         <section className="flex flex-wrap items-start justify-between gap-3">
           <div>

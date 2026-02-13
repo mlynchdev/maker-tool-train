@@ -3,7 +3,6 @@ import { createServerFn } from '@tanstack/react-start'
 import { asc, desc, eq, ne } from 'drizzle-orm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { z } from 'zod'
-import { Header } from '~/components/Header'
 import { db, reservations } from '~/lib/db'
 import { parseSSEMessage } from '~/lib/sse'
 import { moderateReservationRequest } from '~/server/api/admin'
@@ -293,8 +292,6 @@ function BookingRequestsPage() {
 
   return (
     <div>
-      <Header user={user} />
-
       <main className="main">
         <div className="container">
           <div

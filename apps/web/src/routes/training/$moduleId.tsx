@@ -6,7 +6,6 @@ import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
 import { normalizeYouTubeId } from '~/lib/youtube'
 import { getModuleProgress } from '~/server/services/training'
-import { Header } from '~/components/Header'
 import { YouTubePlayer } from '~/components/YouTubePlayer'
 import { updateProgress } from '~/server/api/training'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
@@ -43,7 +42,7 @@ const getModuleData = createServerFn({ method: 'GET' })
 
     const progress = await getModuleProgress(user.id, data.moduleId)
 
-    return { user, module, progress, hasValidVideoId: Boolean(normalizedVideoId) }
+    return { module, progress, hasValidVideoId: Boolean(normalizedVideoId) }
   })
 
 export const Route = createFileRoute('/training/$moduleId')({
@@ -54,7 +53,7 @@ export const Route = createFileRoute('/training/$moduleId')({
 })
 
 function TrainingModulePage() {
-  const { user, module, progress, hasValidVideoId } = Route.useLoaderData()
+  const { module, progress, hasValidVideoId } = Route.useLoaderData()
   const [currentProgress, setCurrentProgress] = useState(progress?.percentComplete || 0)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
@@ -134,8 +133,6 @@ function TrainingModulePage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-6 py-6 md:py-8">
         <Button asChild variant="ghost" className="w-fit px-0">
           <Link to="/training">&larr; Back to Training</Link>

@@ -5,7 +5,6 @@ import { Plus, Search, Video } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { requireAdmin } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
-import { Header } from '~/components/Header'
 import { createTrainingModule, updateTrainingModule } from '~/server/api/admin'
 import { YouTubePreview } from '~/components/YouTubePreview'
 import { formatDuration, normalizeYouTubeId } from '~/lib/youtube'
@@ -17,7 +16,7 @@ import { Input } from '~/components/ui/input'
 import { Label } from '~/components/ui/label'
 
 const getAdminTrainingData = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await requireAdmin()
+  await requireAdmin()
 
   const moduleList = await db.query.trainingModules.findMany({
     orderBy: [asc(trainingModules.title)],
@@ -30,7 +29,7 @@ const getAdminTrainingData = createServerFn({ method: 'GET' }).handler(async () 
     },
   })
 
-  return { user, modules: moduleList }
+  return { modules: moduleList }
 })
 
 export const Route = createFileRoute('/admin/training')({
@@ -41,7 +40,7 @@ export const Route = createFileRoute('/admin/training')({
 })
 
 function AdminTrainingPage() {
-  const { user, modules: initialModules } = Route.useLoaderData()
+  const { modules: initialModules } = Route.useLoaderData()
   const [moduleList, setModuleList] = useState(initialModules)
   const [moduleQuery, setModuleQuery] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -381,8 +380,6 @@ function AdminTrainingPage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-8 py-6 md:py-8">
         <section className="flex flex-wrap items-start justify-between gap-3">
           <div>

@@ -1,5 +1,4 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { Header } from '~/components/Header'
 import { Badge } from '~/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { getMachines } from '~/server/api/machines'
@@ -12,7 +11,7 @@ export const Route = createFileRoute('/machines/')({
 })
 
 function MachinesPage() {
-  const { user, machines } = Route.useLoaderData()
+  const { machines } = Route.useLoaderData()
 
   const eligibleMachines = machines.filter((machine) => machine.eligibility.eligible)
   const blockedMachines = machines.filter((machine) => !machine.eligibility.eligible)
@@ -64,8 +63,6 @@ function MachinesPage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-8 py-6 md:py-8">
         <section>
           <h1 className="text-3xl font-semibold tracking-tight">Machines</h1>

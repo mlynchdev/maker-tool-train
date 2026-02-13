@@ -6,7 +6,6 @@ import { requireAuth } from '~/server/auth/middleware'
 import { db, machines } from '~/lib/db'
 import { checkEligibility } from '~/server/services/eligibility'
 import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
-import { Header } from '~/components/Header'
 import { reserveMachine } from '~/server/api/machines'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
@@ -56,7 +55,7 @@ const getReserveData = createServerFn({ method: 'GET' })
 
     const bookings = await getMachineBookingsInRange(machine.id, now, horizon)
 
-    return { user, machine, bookings, eligibility }
+    return { machine, bookings, eligibility }
   })
 
 export const Route = createFileRoute('/machines/$machineId/reserve')({
@@ -67,7 +66,7 @@ export const Route = createFileRoute('/machines/$machineId/reserve')({
 })
 
 function ReserveMachinePage() {
-  const { user, machine, bookings, eligibility } = Route.useLoaderData()
+  const { machine, bookings, eligibility } = Route.useLoaderData()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -140,8 +139,6 @@ function ReserveMachinePage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-6 py-6 md:py-8">
         <Button asChild variant="ghost" className="w-fit px-0">
           <Link to="/machines/$machineId" params={{ machineId: machine.id }}>

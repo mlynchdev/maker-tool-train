@@ -2,7 +2,6 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { desc, eq } from 'drizzle-orm'
 import { useCallback, useEffect, useState } from 'react'
-import { Header } from '~/components/Header'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
@@ -22,7 +21,7 @@ const getReservationsData = createServerFn({ method: 'GET' }).handler(async () =
     orderBy: [desc(reservations.startTime)],
   })
 
-  return { user, reservations: userReservations }
+  return { reservations: userReservations }
 })
 
 export const Route = createFileRoute('/reservations/')({
@@ -33,7 +32,7 @@ export const Route = createFileRoute('/reservations/')({
 })
 
 function ReservationsPage() {
-  const { user, reservations: initialReservations } = Route.useLoaderData()
+  const { reservations: initialReservations } = Route.useLoaderData()
   const [reservationsList, setReservationsList] = useState(initialReservations)
   const [cancelling, setCancelling] = useState<string | null>(null)
 
@@ -122,8 +121,6 @@ function ReservationsPage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-8 py-6 md:py-8">
         <section className="flex flex-wrap items-start justify-between gap-3">
           <div>

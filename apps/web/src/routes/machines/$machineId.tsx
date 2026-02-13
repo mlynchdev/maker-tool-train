@@ -8,7 +8,6 @@ import { checkEligibility, getMachineRequirements } from '~/server/services/elig
 import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
 import { getAvailableCheckoutSlots } from '~/server/services/checkout-scheduling'
 import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
-import { Header } from '~/components/Header'
 import { requestCheckoutAppointment } from '~/server/api/machines'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
@@ -55,7 +54,6 @@ const getMachineData = createServerFn({ method: 'GET' })
     )
 
     return {
-      user,
       machine,
       makerspaceTimezone: await getMakerspaceTimezone(),
       eligibility,
@@ -75,7 +73,6 @@ export const Route = createFileRoute('/machines/$machineId')({
 
 function MachineDetailPage() {
   const {
-    user,
     machine,
     makerspaceTimezone,
     eligibility,
@@ -163,8 +160,6 @@ function MachineDetailPage() {
 
   return (
     <div className="min-h-screen">
-      <Header user={user} />
-
       <main className="container space-y-6 py-6 md:py-8">
         <Button asChild variant="ghost" className="w-fit px-0">
           <Link to="/machines">&larr; Back to Machines</Link>
