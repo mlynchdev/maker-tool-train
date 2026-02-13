@@ -16,50 +16,61 @@ function MachinesPage() {
   const eligibleMachines = machines.filter((machine) => machine.eligibility.eligible)
   const blockedMachines = machines.filter((machine) => !machine.eligibility.eligible)
 
-  const renderMachineCard = (machine: (typeof machines)[number]) => (
-    <Link
-      key={machine.id}
-      to="/machines/$machineId"
-      params={{ machineId: machine.id }}
-      className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <Card className="h-full transition-shadow hover:shadow-md">
-        <CardHeader className="space-y-3">
-          <div className="flex items-start justify-between gap-3">
-            <CardTitle className="text-lg">{machine.name}</CardTitle>
-            {machine.eligibility.eligible ? (
-              <Badge variant="success">Ready</Badge>
-            ) : (
-              <Badge variant="warning">Needs steps</Badge>
-            )}
-          </div>
-          {machine.description && <CardDescription>{machine.description}</CardDescription>}
-        </CardHeader>
+  const renderMachineCard = (machine: (typeof machines)[number]) => {
+    const reasons = Array.isArray(machine.eligibility?.reasons)
+      ? machine.eligibility.reasons
+      : []
 
-        <CardContent className="space-y-3 pt-0">
-          {!machine.eligibility.eligible ? (
-            <div>
-              <p className="mb-2 text-sm text-muted-foreground">Next requirements:</p>
-              <ul className="space-y-2">
-                {machine.eligibility.reasons.slice(0, 2).map((reason, index) => (
-                  <li key={index} className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
-                    {reason}
-                  </li>
-                ))}
-                {machine.eligibility.reasons.length > 2 && (
-                  <li className="text-sm text-muted-foreground">
-                    +{machine.eligibility.reasons.length - 2} more requirements
-                  </li>
-                )}
-              </ul>
+    return (
+      <Link
+        key={machine.id}
+        to="/machines/$machineId"
+        params={{ machineId: machine.id }}
+        className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Card className="h-full transition-shadow hover:shadow-md">
+          <CardHeader className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <CardTitle className="text-lg">{machine.name}</CardTitle>
+              {machine.eligibility.eligible ? (
+                <Badge variant="success">Ready</Badge>
+              ) : (
+                <Badge variant="warning">Needs steps</Badge>
+              )}
             </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Open details to review schedule and request time.</p>
-          )}
-        </CardContent>
-      </Card>
-    </Link>
-  )
+            {machine.description && <CardDescription>{machine.description}</CardDescription>}
+          </CardHeader>
+
+          <CardContent className="space-y-3 pt-0">
+            {!machine.eligibility.eligible ? (
+              <div>
+                <p className="mb-2 text-sm text-muted-foreground">Next requirements:</p>
+                <ul className="space-y-2">
+                  {reasons.slice(0, 2).map((reason, index) => (
+                    <li key={index} className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
+                      {reason}
+                    </li>
+                  ))}
+                  {reasons.length > 2 && (
+                    <li className="text-sm text-muted-foreground">
+                      +{reasons.length - 2} more requirements
+                    </li>
+                  )}
+                  {reasons.length === 0 && (
+                    <li className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
+                      Missing requirements
+                    </li>
+                  )}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Open details to review schedule and request time.</p>
+            )}
+          </CardContent>
+        </Card>
+      </Link>
+    )
+  }
 
   return (
     <div className="min-h-screen">

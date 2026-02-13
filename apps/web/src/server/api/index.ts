@@ -48,6 +48,7 @@ export {
   updateTrainingModule,
   getUsers,
   updateUser,
+  deleteUser,
   getAdminMachines,
   getAdminModules,
 } from './admin'

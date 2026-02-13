@@ -1,11 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc, desc, eq } from 'drizzle-orm'
-import { Search, Shield, UserCheck, UserX, Wrench } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Search, Shield, Trash2, UserCheck, UserX, Wrench } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { requireManager } from '~/server/auth/middleware'
 import { db, machines, users } from '~/lib/db'
-import { approveCheckout, revokeCheckout, updateUser } from '~/server/api/admin'
+import { approveCheckout, deleteUser, revokeCheckout, updateUser } from '~/server/api/admin'
+import { cn } from '~/lib/utils'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
@@ -73,18 +74,74 @@ function AdminUsersPage() {
     checkoutPairs: initialCheckoutPairs,
   } = Route.useLoaderData()
   const canEditUsers = currentUser.role === 'admin'
+  type ManagedUser = (typeof initialUsers)[number]
 
   const buildCheckoutKey = (userId: string, machineId: string) => `${userId}:${machineId}`
 
   const [userList, setUserList] = useState(initialUsers)
   const [userQuery, setUserQuery] = useState('')
   const [updating, setUpdating] = useState<string | null>(null)
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
+  const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null)
   const [updatingCheckoutKey, setUpdatingCheckoutKey] = useState<string | null>(null)
   const [checkoutKeys, setCheckoutKeys] = useState<Set<string>>(
     () => new Set(initialCheckoutPairs.map((pair) => buildCheckoutKey(pair.userId, pair.machineId)))
   )
+  const [actionNotice, setActionNotice] = useState<{
+    key: string
+    tone: 'error' | 'success'
+    message: string
+  } | null>(null)
+  const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const normalizedQuery = userQuery.trim().toLowerCase()
+  const roleNoticeKey = (userId: string) => `role:${userId}`
+  const statusNoticeKey = (userId: string) => `status:${userId}`
+  const deleteNoticeKey = (userId: string) => `delete:${userId}`
+  const checkoutNoticeKey = (checkoutKey: string) => `checkout:${checkoutKey}`
+
+  const showActionNotice = (
+    key: string,
+    message: string,
+    tone: 'error' | 'success' = 'error'
+  ) => {
+    if (noticeTimeoutRef.current) {
+      clearTimeout(noticeTimeoutRef.current)
+    }
+
+    setActionNotice({ key, tone, message })
+    noticeTimeoutRef.current = setTimeout(() => {
+      setActionNotice((current) => (current?.key === key ? null : current))
+      noticeTimeoutRef.current = null
+    }, 2600)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimeoutRef.current) {
+        clearTimeout(noticeTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const renderActionNotice = (key: string) => {
+    if (!actionNotice || actionNotice.key !== key) return null
+
+    return (
+      <span
+        role="status"
+        aria-live="polite"
+        className={cn(
+          'absolute left-0 top-full z-10 mt-1 w-max max-w-[260px] rounded-md border px-2 py-1 text-xs shadow-sm',
+          actionNotice.tone === 'error'
+            ? 'border-destructive/40 bg-destructive/10 text-destructive'
+            : 'border-emerald-300 bg-emerald-50 text-emerald-900'
+        )}
+      >
+        {actionNotice.message}
+      </span>
+    )
+  }
 
   const filteredUsers = useMemo(() => {
     if (!normalizedQuery) return userList
@@ -121,7 +178,7 @@ function AdminUsersPage() {
         )
       }
     } catch {
-      alert('Failed to update user')
+      showActionNotice(roleNoticeKey(userId), 'Failed to update user role')
     } finally {
       setUpdating(null)
     }
@@ -140,10 +197,79 @@ function AdminUsersPage() {
         )
       }
     } catch {
-      alert('Failed to update user')
+      showActionNotice(statusNoticeKey(userId), 'Failed to update user status')
     } finally {
       setUpdating(null)
     }
+  }
+
+  const removeUserFromState = (userId: string) => {
+    setUserList((prev) => prev.filter((user) => user.id !== userId))
+    setCheckoutKeys((prev) => {
+      const next = new Set<string>()
+      for (const key of prev) {
+        if (!key.startsWith(`${userId}:`)) {
+          next.add(key)
+        }
+      }
+      return next
+    })
+  }
+
+  const handleDeleteUser = async (user: ManagedUser) => {
+    if (!canEditUsers) return
+    if (user.id === currentUser.id) return
+
+    setConfirmDeleteUserId(null)
+    setDeletingUserId(user.id)
+    try {
+      const result = await deleteUser({ data: { userId: user.id } })
+
+      if (!result.success) {
+        showActionNotice(
+          deleteNoticeKey(user.id),
+          result.error || 'Failed to delete user account'
+        )
+        return
+      }
+
+      removeUserFromState(user.id)
+    } catch {
+      showActionNotice(deleteNoticeKey(user.id), 'Failed to delete user account')
+    } finally {
+      setDeletingUserId(null)
+    }
+  }
+
+  const renderDeleteConfirm = (user: ManagedUser) => {
+    if (confirmDeleteUserId !== user.id) return null
+
+    return (
+      <div className="absolute left-0 top-full z-20 mt-1 w-64 rounded-md border bg-card p-2 shadow-md">
+        <p className="text-[11px] text-muted-foreground">Delete {user.email}?</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">This cannot be undone.</p>
+        <div className="mt-2 flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-7 px-2 text-xs"
+            onClick={() => handleDeleteUser(user)}
+            disabled={deletingUserId === user.id}
+          >
+            Confirm
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            onClick={() => setConfirmDeleteUserId(null)}
+            disabled={deletingUserId === user.id}
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   const formatDate = (date: Date) => {
@@ -165,7 +291,10 @@ function AdminUsersPage() {
         : await approveCheckout({ data: { userId, machineId } })
 
       if (!result.success) {
-        alert(result.error || 'Failed to update checkout')
+        showActionNotice(
+          checkoutNoticeKey(checkoutKey),
+          result.error || 'Failed to update checkout access'
+        )
         return
       }
 
@@ -179,7 +308,7 @@ function AdminUsersPage() {
         return next
       })
     } catch {
-      alert('Failed to update checkout')
+      showActionNotice(checkoutNoticeKey(checkoutKey), 'Failed to update checkout access')
     } finally {
       setUpdatingCheckoutKey(null)
     }
@@ -207,7 +336,7 @@ function AdminUsersPage() {
           </p>
           {!canEditUsers && (
             <p className="mt-2 text-sm text-muted-foreground">
-              Managers can update checkout access. Role and account status changes are admin-only.
+              Managers can update checkout access. Role, status, and deletion changes are admin-only.
             </p>
           )}
         </section>
@@ -244,7 +373,7 @@ function AdminUsersPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base">Accounts</CardTitle>
-                <CardDescription>Search and update user roles or account status.</CardDescription>
+                <CardDescription>Search, update, or delete user accounts.</CardDescription>
               </div>
               <div className="relative w-full max-w-sm">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -282,21 +411,24 @@ function AdminUsersPage() {
                             </TableCell>
                             <TableCell>
                               {canEditUsers ? (
-                                <select
-                                  className={selectClassName}
-                                  value={user.role}
-                                  onChange={(e) =>
-                                    handleRoleChange(
-                                      user.id,
-                                      e.target.value as 'member' | 'manager' | 'admin'
-                                    )
-                                  }
-                                  disabled={isSelf || updating === user.id}
-                                >
-                                  <option value="member">Member</option>
-                                  <option value="manager">Manager</option>
-                                  <option value="admin">Admin</option>
-                                </select>
+                                <div className="relative w-full">
+                                  <select
+                                    className={selectClassName}
+                                    value={user.role}
+                                    onChange={(e) =>
+                                      handleRoleChange(
+                                        user.id,
+                                        e.target.value as 'member' | 'manager' | 'admin'
+                                      )
+                                    }
+                                    disabled={isSelf || updating === user.id || deletingUserId === user.id}
+                                  >
+                                    <option value="member">Member</option>
+                                    <option value="manager">Manager</option>
+                                    <option value="admin">Admin</option>
+                                  </select>
+                                  {renderActionNotice(roleNoticeKey(user.id))}
+                                </div>
                               ) : (
                                 <Badge variant={roleBadgeVariant(user.role)} className="capitalize">
                                   {user.role}
@@ -311,19 +443,37 @@ function AdminUsersPage() {
                             <TableCell>{formatDate(user.createdAt)}</TableCell>
                             <TableCell>
                               {canEditUsers && !isSelf && (
-                                <Button
-                                  variant={user.status === 'active' ? 'destructive' : 'default'}
-                                  size="sm"
-                                  onClick={() =>
-                                    handleStatusChange(
-                                      user.id,
-                                      user.status === 'active' ? 'suspended' : 'active'
-                                    )
-                                  }
-                                  disabled={updating === user.id}
-                                >
-                                  {user.status === 'active' ? 'Suspend' : 'Activate'}
-                                </Button>
+                                <div className="relative flex items-center gap-2">
+                                  <Button
+                                    variant={user.status === 'active' ? 'destructive' : 'default'}
+                                    size="sm"
+                                    onClick={() =>
+                                      handleStatusChange(
+                                        user.id,
+                                        user.status === 'active' ? 'suspended' : 'active'
+                                      )
+                                    }
+                                    disabled={updating === user.id || deletingUserId === user.id}
+                                  >
+                                    {user.status === 'active' ? 'Suspend' : 'Activate'}
+                                  </Button>
+                                  {renderActionNotice(statusNoticeKey(user.id))}
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      setConfirmDeleteUserId((current) =>
+                                        current === user.id ? null : user.id
+                                      )
+                                    }
+                                    disabled={updating === user.id || deletingUserId === user.id}
+                                  >
+                                    <Trash2 className="mr-1 h-3.5 w-3.5" />
+                                    {deletingUserId === user.id ? 'Deleting...' : 'Delete'}
+                                  </Button>
+                                  {renderDeleteConfirm(user)}
+                                  {renderActionNotice(deleteNoticeKey(user.id))}
+                                </div>
                               )}
                               {canEditUsers && isSelf && (
                                 <span className="text-xs text-muted-foreground">Current user</span>
@@ -361,7 +511,7 @@ function AdminUsersPage() {
                           </div>
 
                           {canEditUsers ? (
-                            <div className="space-y-2">
+                            <div className="relative space-y-2">
                               <label className="text-xs font-medium uppercase text-muted-foreground">Role</label>
                               <select
                                 className={selectClassName}
@@ -372,32 +522,51 @@ function AdminUsersPage() {
                                     e.target.value as 'member' | 'manager' | 'admin'
                                   )
                                 }
-                                disabled={isSelf || updating === user.id}
+                                disabled={isSelf || updating === user.id || deletingUserId === user.id}
                               >
                                 <option value="member">Member</option>
                                 <option value="manager">Manager</option>
                                 <option value="admin">Admin</option>
                               </select>
+                              {renderActionNotice(roleNoticeKey(user.id))}
                             </div>
                           ) : null}
 
                           {canEditUsers && !isSelf ? (
-                            <Button
-                              variant={user.status === 'active' ? 'destructive' : 'default'}
-                              size="sm"
-                              onClick={() =>
-                                handleStatusChange(
-                                  user.id,
-                                  user.status === 'active' ? 'suspended' : 'active'
-                                )
-                              }
-                              disabled={updating === user.id}
-                            >
-                              {user.status === 'active' ? 'Suspend account' : 'Activate account'}
-                            </Button>
+                            <div className="relative flex flex-wrap gap-2">
+                              <Button
+                                variant={user.status === 'active' ? 'destructive' : 'default'}
+                                size="sm"
+                                onClick={() =>
+                                  handleStatusChange(
+                                    user.id,
+                                    user.status === 'active' ? 'suspended' : 'active'
+                                  )
+                                }
+                                disabled={updating === user.id || deletingUserId === user.id}
+                              >
+                                {user.status === 'active' ? 'Suspend account' : 'Activate account'}
+                              </Button>
+                              {renderActionNotice(statusNoticeKey(user.id))}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  setConfirmDeleteUserId((current) =>
+                                    current === user.id ? null : user.id
+                                  )
+                                }
+                                disabled={updating === user.id || deletingUserId === user.id}
+                              >
+                                <Trash2 className="mr-1 h-3.5 w-3.5" />
+                                {deletingUserId === user.id ? 'Deleting...' : 'Delete account'}
+                              </Button>
+                              {renderDeleteConfirm(user)}
+                              {renderActionNotice(deleteNoticeKey(user.id))}
+                            </div>
                           ) : (
                             <p className="text-xs text-muted-foreground">
-                              {isSelf ? 'Current user account.' : 'Status changes are admin-only.'}
+                              {isSelf ? 'Current user account.' : 'Status and deletion are admin-only.'}
                             </p>
                           )}
                         </CardContent>
@@ -481,18 +650,21 @@ function AdminUsersPage() {
                                     )}
                                   </div>
                                 </div>
-                                <Button
-                                  variant={checkedOut ? 'outline' : 'default'}
-                                  size="sm"
-                                  onClick={() => handleToggleCheckout(member.id, machine.id)}
-                                  disabled={disabled}
-                                >
-                                  {isUpdating
-                                    ? 'Saving...'
-                                    : checkedOut
-                                      ? 'Revoke checkout'
-                                      : 'Grant checkout'}
-                                </Button>
+                                <div className="relative">
+                                  <Button
+                                    variant={checkedOut ? 'outline' : 'default'}
+                                    size="sm"
+                                    onClick={() => handleToggleCheckout(member.id, machine.id)}
+                                    disabled={disabled}
+                                  >
+                                    {isUpdating
+                                      ? 'Saving...'
+                                      : checkedOut
+                                        ? 'Revoke checkout'
+                                        : 'Grant checkout'}
+                                  </Button>
+                                  {renderActionNotice(checkoutNoticeKey(key))}
+                                </div>
                               </div>
                             )
                           })}

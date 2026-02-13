@@ -88,6 +88,10 @@ interface TimelineItem {
 
 const ACTIVE_RESERVATION_STATUSES = ['pending', 'approved', 'confirmed'] as const
 
+function asArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : []
+}
+
 function toDate(value: DateValue) {
   return new Date(value)
 }
@@ -169,10 +173,10 @@ export function Dashboard({ user }: DashboardProps) {
       ])
 
       setUnreadNotifications(unreadResult.count)
-      setNotifications(notificationsResult.notifications)
+      setNotifications(asArray(notificationsResult.notifications))
       setTrainingStatus(trainingResult)
-      setReservations(reservationsResult.reservations)
-      setMachines(machinesResult.machines)
+      setReservations(asArray(reservationsResult.reservations))
+      setMachines(asArray(machinesResult.machines))
 
       if (isManagerOrAdmin) {
         const rangeStart = new Date()
@@ -191,8 +195,8 @@ export function Dashboard({ user }: DashboardProps) {
         ])
 
         setPendingCheckoutCount(checkoutCountResult.count)
-        setPendingApprovals(pendingCheckoutsResult.pendingApprovals)
-        setCheckoutAppointments(availabilityResult.appointments)
+        setPendingApprovals(asArray(pendingCheckoutsResult.pendingApprovals))
+        setCheckoutAppointments(asArray(availabilityResult.appointments))
       } else {
         setPendingCheckoutCount(0)
         setPendingApprovals([])
@@ -206,7 +210,7 @@ export function Dashboard({ user }: DashboardProps) {
         ])
 
         setPendingRequestCount(requestCountResult.count)
-        setPendingRequests(requestResult.requests)
+        setPendingRequests(asArray(requestResult.requests))
       } else {
         setPendingRequestCount(0)
         setPendingRequests([])
