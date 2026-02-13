@@ -175,7 +175,7 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Control Deck</p>
-            <h2 className="mt-1 text-lg font-semibold tracking-tight">Training System</h2>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight">SBHX Training</h2>
             <p className="mt-1 text-xs text-muted-foreground">{user.name || user.email}</p>
           </div>
           {mobile && onClose && (

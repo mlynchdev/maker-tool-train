@@ -81,6 +81,10 @@ AUTH_PROVIDER=dev
 CALCOM_API_URL=http://localhost:3000
 ```
 
+## Git Commits
+
+- Never add "Co-Authored-By" lines to commit messages
+
 ## Test Accounts (after seeding)
 
 - `admin@example.com` / `admin123`
