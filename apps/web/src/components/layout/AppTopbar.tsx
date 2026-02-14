@@ -76,7 +76,7 @@ function getTopbarMeta(pathname: string): TopbarMeta {
   if (normalizedPath === '/admin/checkouts') {
     return {
       title: 'Checkout Management',
-      subtitle: 'Approve checkouts and manage manager availability windows.',
+      subtitle: 'Review pending requests, finalize accepted meetings, and manage availability.',
     }
   }
 
@@ -139,7 +139,6 @@ export function AppTopbar({ pathname, onOpenSidebar }: AppTopbarProps) {
   const { user, badges, refreshing, lastRefreshedAt, refreshBadges } = useShellContext()
   const meta = getTopbarMeta(pathname)
 
-  const isManagerOrAdmin = user.role === 'manager' || user.role === 'admin'
   const isAdmin = user.role === 'admin'
 
   return (
@@ -177,7 +176,7 @@ export function AppTopbar({ pathname, onOpenSidebar }: AppTopbarProps) {
             </Badge>
           )}
 
-          {isManagerOrAdmin && badges.pendingCheckoutCount > 0 && (
+          {isAdmin && badges.pendingCheckoutCount > 0 && (
             <Badge variant="warning" className="hidden md:inline-flex">
               <ClipboardCheck className="mr-1 h-3.5 w-3.5" />
               {badges.pendingCheckoutCount}

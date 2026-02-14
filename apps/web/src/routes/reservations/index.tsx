@@ -1,17 +1,19 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm'
 import { useCallback, useEffect, useState } from 'react'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
-import { db, reservations } from '~/lib/db'
+import { checkoutAppointments, db, reservations } from '~/lib/db'
 import { parseSSEMessage } from '~/lib/sse'
 import { requireAuth } from '~/server/auth/middleware'
+import { cancelMyCheckoutAppointment } from '~/server/api/machines'
 import { cancelReservation } from '~/server/api/reservations'
 
 const getReservationsData = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await requireAuth()
+  const now = new Date()
 
   const userReservations = await db.query.reservations.findMany({
     where: eq(reservations.userId, user.id),
@@ -21,7 +23,23 @@ const getReservationsData = createServerFn({ method: 'GET' }).handler(async () =
     orderBy: [desc(reservations.startTime)],
   })
 
-  return { reservations: userReservations }
+  const userCheckoutAppointments = await db.query.checkoutAppointments.findMany({
+    where: and(
+      eq(checkoutAppointments.userId, user.id),
+      inArray(checkoutAppointments.status, ['pending', 'accepted']),
+      gt(checkoutAppointments.startTime, now)
+    ),
+    with: {
+      machine: true,
+      manager: true,
+    },
+    orderBy: [asc(checkoutAppointments.startTime)],
+  })
+
+  return {
+    reservations: userReservations,
+    checkoutAppointments: userCheckoutAppointments,
+  }
 })
 
 export const Route = createFileRoute('/reservations/')({
@@ -32,13 +50,21 @@ export const Route = createFileRoute('/reservations/')({
 })
 
 function ReservationsPage() {
-  const { reservations: initialReservations } = Route.useLoaderData()
+  const {
+    reservations: initialReservations,
+    checkoutAppointments: initialCheckoutAppointments,
+  } = Route.useLoaderData()
   const [reservationsList, setReservationsList] = useState(initialReservations)
+  const [checkoutAppointmentsList, setCheckoutAppointmentsList] = useState(
+    initialCheckoutAppointments
+  )
   const [cancelling, setCancelling] = useState<string | null>(null)
+  const [cancellingCheckoutId, setCancellingCheckoutId] = useState<string | null>(null)
 
   const refreshReservations = useCallback(async () => {
     const latest = await getReservationsData()
     setReservationsList(latest.reservations)
+    setCheckoutAppointmentsList(latest.checkoutAppointments)
   }, [])
 
   const formatDateTime = (date: Date) => {
@@ -85,6 +111,34 @@ function ReservationsPage() {
     }
   }
 
+  const handleCancelCheckoutAppointment = async (appointmentId: string) => {
+    const reason = prompt('Cancellation reason (optional):')?.trim()
+    if (!confirm('Are you sure you want to cancel this checkout appointment?')) return
+
+    setCancellingCheckoutId(appointmentId)
+
+    try {
+      const result = await cancelMyCheckoutAppointment({
+        data: {
+          appointmentId,
+          reason: reason || undefined,
+        },
+      })
+
+      if (result.success) {
+        setCheckoutAppointmentsList((prev) =>
+          prev.filter((appointment) => appointment.id !== appointmentId)
+        )
+      } else {
+        alert(result.error || 'Failed to cancel checkout appointment')
+      }
+    } catch {
+      alert('An error occurred')
+    } finally {
+      setCancellingCheckoutId(null)
+    }
+  }
+
   const activeStatuses = ['pending', 'approved', 'confirmed']
 
   useEffect(() => {
@@ -95,7 +149,7 @@ function ReservationsPage() {
       if (!message) return
       if (message.type === 'connected') return
 
-      if (message.event === 'booking') {
+      if (message.event === 'booking' || message.event === 'checkout') {
         refreshReservations()
       }
     }
@@ -153,6 +207,57 @@ function ReservationsPage() {
               <CardTitle className="text-2xl">{cancelledCount}</CardTitle>
             </CardHeader>
           </Card>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">Upcoming checkout appointments</h2>
+            <Badge variant="warning">{checkoutAppointmentsList.length}</Badge>
+          </div>
+
+          {checkoutAppointmentsList.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {checkoutAppointmentsList.map((appointment) => (
+                <Card key={appointment.id}>
+                  <CardHeader className="space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <CardTitle className="text-lg">{appointment.machine.name}</CardTitle>
+                      <Badge
+                        variant={appointment.status === 'accepted' ? 'success' : 'warning'}
+                        className="capitalize"
+                      >
+                        {appointment.status}
+                      </Badge>
+                    </div>
+                    <CardDescription>
+                      {formatDateTime(appointment.startTime)} to {formatDateTime(appointment.endTime)}
+                    </CardDescription>
+                    <CardDescription>
+                      With {appointment.manager.name || appointment.manager.email}
+                    </CardDescription>
+                  </CardHeader>
+
+                  <CardContent>
+                    <Button
+                      variant="destructive"
+                      onClick={() => handleCancelCheckoutAppointment(appointment.id)}
+                      disabled={cancellingCheckoutId === appointment.id}
+                    >
+                      {cancellingCheckoutId === appointment.id
+                        ? 'Cancelling...'
+                        : 'Cancel checkout appointment'}
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center">
+                <p className="text-muted-foreground">No upcoming checkout appointments.</p>
+              </CardContent>
+            </Card>
+          )}
         </section>
 
         <section>

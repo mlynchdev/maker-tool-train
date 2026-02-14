@@ -47,10 +47,18 @@ const mocks = vi.hoisted(() => {
       endTime: 'checkout_appointments.end_time',
       status: 'checkout_appointments.status',
     },
+    checkoutAppointmentEvents: {
+      id: 'checkout_appointment_events.id',
+      appointmentId: 'checkout_appointment_events.appointment_id',
+      eventType: 'checkout_appointment_events.event_type',
+    },
     getMakerspaceTimezone: vi.fn(),
     checkEligibility: vi.fn(),
-    notifyManagerCheckoutAppointmentBooked: vi.fn(),
-    notifyUserCheckoutAppointmentBooked: vi.fn(),
+    notifyAdminsCheckoutRequestSubmitted: vi.fn(),
+    notifyUserCheckoutRequestAccepted: vi.fn(),
+    notifyUserCheckoutRequestRejected: vi.fn(),
+    notifyUserCheckoutResultPassed: vi.fn(),
+    notifyUserCheckoutResultFailed: vi.fn(),
     notifyUserCheckoutAppointmentCancelled: vi.fn(),
   }
 })
@@ -64,6 +72,7 @@ vi.mock('drizzle-orm', () => ({
   inArray: vi.fn((...args: unknown[]) => ({ kind: 'inArray', args })),
   lt: vi.fn((...args: unknown[]) => ({ kind: 'lt', args })),
   lte: vi.fn((...args: unknown[]) => ({ kind: 'lte', args })),
+  ne: vi.fn((...args: unknown[]) => ({ kind: 'ne', args })),
   or: vi.fn((...args: unknown[]) => ({ kind: 'or', args })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
     kind: 'sql',
@@ -79,6 +88,7 @@ vi.mock('~/lib/db', () => ({
   managerCheckouts: mocks.managerCheckouts,
   checkoutAvailabilityRules: mocks.checkoutAvailabilityRules,
   checkoutAppointments: mocks.checkoutAppointments,
+  checkoutAppointmentEvents: mocks.checkoutAppointmentEvents,
 }))
 
 vi.mock('./eligibility', () => ({
@@ -90,8 +100,11 @@ vi.mock('./makerspace-settings', () => ({
 }))
 
 vi.mock('./notifications', () => ({
-  notifyManagerCheckoutAppointmentBooked: mocks.notifyManagerCheckoutAppointmentBooked,
-  notifyUserCheckoutAppointmentBooked: mocks.notifyUserCheckoutAppointmentBooked,
+  notifyAdminsCheckoutRequestSubmitted: mocks.notifyAdminsCheckoutRequestSubmitted,
+  notifyUserCheckoutRequestAccepted: mocks.notifyUserCheckoutRequestAccepted,
+  notifyUserCheckoutRequestRejected: mocks.notifyUserCheckoutRequestRejected,
+  notifyUserCheckoutResultPassed: mocks.notifyUserCheckoutResultPassed,
+  notifyUserCheckoutResultFailed: mocks.notifyUserCheckoutResultFailed,
   notifyUserCheckoutAppointmentCancelled: mocks.notifyUserCheckoutAppointmentCancelled,
 }))
 
@@ -101,11 +114,14 @@ import {
   cancelCheckoutAppointmentByManager,
   createCheckoutAvailabilityBlock,
   deactivateCheckoutAvailabilityBlock,
+  finalizeCheckoutAppointment,
+  moderateCheckoutAppointmentRequest,
 } from './checkout-scheduling'
 import {
-  notifyManagerCheckoutAppointmentBooked,
-  notifyUserCheckoutAppointmentBooked,
+  notifyAdminsCheckoutRequestSubmitted,
   notifyUserCheckoutAppointmentCancelled,
+  notifyUserCheckoutRequestAccepted,
+  notifyUserCheckoutResultFailed,
 } from './notifications'
 
 const WEEKDAY_TO_NUMBER: Record<string, number> = {
@@ -156,6 +172,25 @@ function mockUpdateReturning(row: Record<string, unknown>) {
   mocks.db.update.mockReturnValue({ set })
 }
 
+function mockTransactionalUpdateReturning(rows: Array<Record<string, unknown>>) {
+  const tx = {
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue(rows),
+        }),
+      }),
+    }),
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockResolvedValue(undefined),
+    }),
+  }
+
+  mocks.db.transaction.mockImplementation(async (callback: (arg: unknown) => unknown) => {
+    return callback(tx)
+  })
+}
+
 function mockSuccessfulBookingTransaction(
   appointment: Record<string, unknown>,
   conflicts: Array<Record<string, unknown>> = []
@@ -183,10 +218,80 @@ function mockSuccessfulBookingTransaction(
   })
 }
 
+function mockModerationTransaction(updated: Record<string, unknown>) {
+  const tx = {
+    execute: vi.fn().mockResolvedValue(undefined),
+    query: {
+      checkoutAppointments: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'appointment-1',
+          userId: 'member-1',
+          machineId: 'machine-1',
+          managerId: 'manager-1',
+          startTime: new Date(Date.now() + 60 * 60 * 1000),
+          endTime: new Date(Date.now() + 90 * 60 * 1000),
+          status: 'pending',
+        }),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    },
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([updated]),
+        }),
+      }),
+    }),
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockResolvedValue(undefined),
+    }),
+  }
+
+  mocks.db.transaction.mockImplementation(async (callback: (arg: unknown) => unknown) => {
+    return callback(tx)
+  })
+}
+
+function mockFinalizeFailTransaction(updated: Record<string, unknown>) {
+  const tx = {
+    execute: vi.fn().mockResolvedValue(undefined),
+    query: {
+      checkoutAppointments: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'appointment-2',
+          userId: 'member-1',
+          machineId: 'machine-1',
+          status: 'accepted',
+        }),
+      },
+      managerCheckouts: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+    },
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([updated]),
+        }),
+      }),
+    }),
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockResolvedValue(undefined),
+    }),
+  }
+
+  mocks.db.transaction.mockImplementation(async (callback: (arg: unknown) => unknown) => {
+    return callback(tx)
+  })
+}
+
 describe('checkout-scheduling service', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     mocks.getMakerspaceTimezone.mockResolvedValue('America/Los_Angeles')
     mocks.db.query.managerCheckouts.findFirst.mockResolvedValue(null)
+    mocks.db.query.checkoutAppointments.findFirst.mockResolvedValue(null)
+    mocks.db.query.checkoutAppointments.findMany.mockResolvedValue([])
     mocks.checkEligibility.mockResolvedValue({
       eligible: true,
       reasons: [],
@@ -260,7 +365,7 @@ describe('checkout-scheduling service', () => {
       managerId: 'manager-1',
       startTime: slotStartTime,
       endTime: appointmentEnd,
-      status: 'scheduled',
+      status: 'pending',
     }
 
     mocks.db.query.users.findFirst.mockResolvedValue({
@@ -268,6 +373,7 @@ describe('checkout-scheduling service', () => {
       email: 'member@example.com',
       name: 'Member',
       status: 'active',
+      role: 'member',
     })
     mocks.db.query.machines.findFirst.mockResolvedValue({
       id: 'machine-1',
@@ -302,8 +408,7 @@ describe('checkout-scheduling service', () => {
       success: true,
       data: appointment,
     })
-    expect(notifyManagerCheckoutAppointmentBooked).toHaveBeenCalledTimes(1)
-    expect(notifyUserCheckoutAppointmentBooked).toHaveBeenCalledTimes(1)
+    expect(notifyAdminsCheckoutRequestSubmitted).toHaveBeenCalledTimes(1)
   })
 
   it('rejects booking when overlapping checkout appointment already exists', async () => {
@@ -315,6 +420,7 @@ describe('checkout-scheduling service', () => {
       email: 'member@example.com',
       name: 'Member',
       status: 'active',
+      role: 'member',
     })
     mocks.db.query.machines.findFirst.mockResolvedValue({
       id: 'machine-1',
@@ -359,6 +465,7 @@ describe('checkout-scheduling service', () => {
       email: 'member@example.com',
       name: 'Member',
       status: 'active',
+      role: 'member',
     })
     mocks.db.query.machines.findFirst.mockResolvedValue({
       id: 'machine-1',
@@ -386,7 +493,7 @@ describe('checkout-scheduling service', () => {
     expect(mocks.db.transaction).not.toHaveBeenCalled()
   })
 
-  it('rejects booking when user already has another upcoming checkout appointment', async () => {
+  it('rejects booking when user already has an active checkout request for the same machine', async () => {
     const slotStartTime = new Date(Date.now() + 3 * 60 * 60 * 1000)
     slotStartTime.setMinutes(0, 0, 0)
 
@@ -395,6 +502,7 @@ describe('checkout-scheduling service', () => {
       email: 'member@example.com',
       name: 'Member',
       status: 'active',
+      role: 'member',
     })
     mocks.db.query.machines.findFirst.mockResolvedValue({
       id: 'machine-1',
@@ -419,7 +527,7 @@ describe('checkout-scheduling service', () => {
 
     expect(result).toEqual({
       success: false,
-      error: 'You already have an upcoming checkout appointment',
+      error: 'You already have an active checkout request for this machine or tool',
     })
     expect(mocks.db.transaction).not.toHaveBeenCalled()
   })
@@ -438,6 +546,7 @@ describe('checkout-scheduling service', () => {
       email: 'member@example.com',
       name: 'Member',
       status: 'active',
+      role: 'member',
     })
     mocks.db.query.machines.findFirst.mockResolvedValue({
       id: 'machine-1',
@@ -488,7 +597,7 @@ describe('checkout-scheduling service', () => {
       managerId: 'manager-1',
       startTime: slotStartTime,
       endTime: appointmentEnd,
-      status: 'scheduled',
+      status: 'pending',
     })
 
     const result = await bookCheckoutAppointment({
@@ -508,7 +617,7 @@ describe('checkout-scheduling service', () => {
         managerId: 'manager-1',
         startTime: slotStartTime,
         endTime: appointmentEnd,
-        status: 'scheduled',
+        status: 'pending',
       },
     })
   })
@@ -524,6 +633,7 @@ describe('checkout-scheduling service', () => {
       email: 'member@example.com',
       name: 'Member',
       status: 'active',
+      role: 'member',
     })
     mocks.db.query.machines.findFirst.mockResolvedValue({
       id: 'machine-1',
@@ -561,6 +671,7 @@ describe('checkout-scheduling service', () => {
       email: 'member@example.com',
       name: 'Member',
       status: 'active',
+      role: 'member',
     })
     mocks.db.query.machines.findFirst.mockResolvedValue({
       id: 'machine-1',
@@ -594,8 +705,11 @@ describe('checkout-scheduling service', () => {
     })
   })
 
-  it('cancels future scheduled appointments for a user/machine pair', async () => {
-    mockUpdateReturning({ id: 'appointment-future-1' })
+  it('cancels future pending/accepted appointments for a user/machine pair', async () => {
+    mocks.db.query.checkoutAppointments.findMany.mockResolvedValue([
+      { id: 'appointment-future-1', status: 'pending' },
+    ])
+    mockTransactionalUpdateReturning([{ id: 'appointment-future-1' }])
 
     const result = await cancelFutureCheckoutAppointmentsForUserMachine({
       userId: 'member-1',
@@ -604,10 +718,10 @@ describe('checkout-scheduling service', () => {
     })
 
     expect(result).toEqual([{ id: 'appointment-future-1' }])
-    expect(mocks.db.update).toHaveBeenCalledTimes(1)
+    expect(mocks.db.transaction).toHaveBeenCalledTimes(1)
   })
 
-  it('cancels a scheduled future appointment by manager/admin', async () => {
+  it('cancels an accepted future appointment by manager/admin', async () => {
     const startTime = new Date(Date.now() + 6 * 60 * 60 * 1000)
     const endTime = new Date(startTime.getTime() + 30 * 60 * 1000)
 
@@ -617,16 +731,18 @@ describe('checkout-scheduling service', () => {
       user: { id: 'member-1', email: 'member@example.com', name: 'Member' },
       manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
       machine: { id: 'machine-1', name: 'Laser Cutter' },
-      status: 'scheduled',
+      status: 'accepted',
       startTime,
       endTime,
     })
-    mockUpdateReturning({
-      id: 'appointment-1',
-      status: 'cancelled',
-      startTime,
-      endTime,
-    })
+    mockTransactionalUpdateReturning([
+      {
+        id: 'appointment-1',
+        status: 'cancelled',
+        startTime,
+        endTime,
+      },
+    ])
 
     const result = await cancelCheckoutAppointmentByManager({
       appointmentId: 'appointment-1',
@@ -646,6 +762,48 @@ describe('checkout-scheduling service', () => {
     expect(notifyUserCheckoutAppointmentCancelled).toHaveBeenCalledTimes(1)
   })
 
+  it('allows a member to cancel their own future checkout appointment', async () => {
+    const startTime = new Date(Date.now() + 4 * 60 * 60 * 1000)
+    const endTime = new Date(startTime.getTime() + 30 * 60 * 1000)
+
+    mocks.db.query.checkoutAppointments.findFirst.mockResolvedValue({
+      id: 'appointment-member-1',
+      managerId: 'manager-1',
+      user: { id: 'member-1', email: 'member@example.com', name: 'Member' },
+      manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
+      machine: { id: 'machine-1', name: 'Laser Cutter' },
+      status: 'pending',
+      startTime,
+      endTime,
+    })
+    mockTransactionalUpdateReturning([
+      {
+        id: 'appointment-member-1',
+        status: 'cancelled',
+        startTime,
+        endTime,
+      },
+    ])
+
+    const result = await cancelCheckoutAppointmentByManager({
+      appointmentId: 'appointment-member-1',
+      managerId: 'member-1',
+      actorRole: 'member',
+      reason: 'Schedule conflict',
+    })
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        id: 'appointment-member-1',
+        status: 'cancelled',
+        startTime,
+        endTime,
+      },
+    })
+    expect(notifyUserCheckoutAppointmentCancelled).not.toHaveBeenCalled()
+  })
+
   it('does not allow cancelling an appointment that already started', async () => {
     const startTime = new Date(Date.now() - 10 * 60 * 1000)
 
@@ -655,7 +813,7 @@ describe('checkout-scheduling service', () => {
       user: { id: 'member-1', email: 'member@example.com', name: 'Member' },
       manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
       machine: { id: 'machine-1', name: 'Laser Cutter' },
-      status: 'scheduled',
+      status: 'accepted',
       startTime,
       endTime: new Date(startTime.getTime() + 30 * 60 * 1000),
     })
@@ -669,6 +827,146 @@ describe('checkout-scheduling service', () => {
       success: false,
       error: 'Only future appointments can be cancelled',
     })
+  })
+
+  it('allows admin to accept a pending checkout request', async () => {
+    const startTime = new Date(Date.now() + 2 * 60 * 60 * 1000)
+    const endTime = new Date(startTime.getTime() + 30 * 60 * 1000)
+
+    mocks.db.query.users.findFirst.mockResolvedValue({
+      id: 'admin-1',
+      email: 'admin@example.com',
+      name: 'Admin',
+      role: 'admin',
+      status: 'active',
+    })
+    mocks.db.query.checkoutAppointments.findFirst.mockResolvedValue({
+      id: 'appointment-1',
+      userId: 'member-1',
+      managerId: 'manager-1',
+      machineId: 'machine-1',
+      status: 'pending',
+      startTime,
+      endTime,
+      user: { id: 'member-1', email: 'member@example.com', name: 'Member' },
+      machine: { id: 'machine-1', name: 'Laser Cutter' },
+      manager: { id: 'manager-1', email: 'manager@example.com', name: 'Manager' },
+    })
+    mockModerationTransaction({
+      id: 'appointment-1',
+      status: 'accepted',
+      reviewedBy: 'admin-1',
+      reviewedAt: new Date(),
+    })
+
+    const result = await moderateCheckoutAppointmentRequest({
+      appointmentId: 'appointment-1',
+      adminId: 'admin-1',
+      decision: 'accept',
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.status).toBe('accepted')
+    }
+    expect(notifyUserCheckoutRequestAccepted).toHaveBeenCalledTimes(1)
+  })
+
+  it('records failed checkout outcomes without granting checkout access', async () => {
+    const startTime = new Date(Date.now() - 60 * 60 * 1000)
+    const endTime = new Date(startTime.getTime() + 30 * 60 * 1000)
+
+    mocks.db.query.users.findFirst.mockResolvedValue({
+      id: 'admin-1',
+      email: 'admin@example.com',
+      name: 'Admin',
+      role: 'admin',
+      status: 'active',
+    })
+    mocks.db.query.checkoutAppointments.findFirst.mockResolvedValue({
+      id: 'appointment-2',
+      userId: 'member-1',
+      machineId: 'machine-1',
+      managerId: 'manager-1',
+      status: 'accepted',
+      startTime,
+      endTime,
+      user: { id: 'member-1', email: 'member@example.com', name: 'Member' },
+      machine: { id: 'machine-1', name: 'Laser Cutter' },
+    })
+    mockFinalizeFailTransaction({
+      id: 'appointment-2',
+      status: 'completed',
+      result: 'fail',
+      resultedBy: 'admin-1',
+      resultedAt: new Date(),
+    })
+
+    const result = await finalizeCheckoutAppointment({
+      appointmentId: 'appointment-2',
+      adminId: 'admin-1',
+      result: 'fail',
+      notes: 'Needs more supervised practice',
+    })
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        appointment: {
+          id: 'appointment-2',
+          status: 'completed',
+          result: 'fail',
+          resultedBy: 'admin-1',
+          resultedAt: expect.any(Date),
+        },
+        checkoutGranted: false,
+      },
+    })
+    expect(notifyUserCheckoutResultFailed).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows finalizing an accepted checkout before its scheduled start time', async () => {
+    const startTime = new Date(Date.now() + 45 * 60 * 1000)
+    const endTime = new Date(startTime.getTime() + 30 * 60 * 1000)
+
+    mocks.db.query.users.findFirst.mockResolvedValue({
+      id: 'admin-1',
+      email: 'admin@example.com',
+      name: 'Admin',
+      role: 'admin',
+      status: 'active',
+    })
+    mocks.db.query.checkoutAppointments.findFirst.mockResolvedValue({
+      id: 'appointment-early',
+      userId: 'member-1',
+      machineId: 'machine-1',
+      managerId: 'manager-1',
+      status: 'accepted',
+      startTime,
+      endTime,
+      user: { id: 'member-1', email: 'member@example.com', name: 'Member' },
+      machine: { id: 'machine-1', name: 'Laser Cutter' },
+    })
+    mockFinalizeFailTransaction({
+      id: 'appointment-early',
+      status: 'completed',
+      result: 'fail',
+      resultedBy: 'admin-1',
+      resultedAt: new Date(),
+    })
+
+    const result = await finalizeCheckoutAppointment({
+      appointmentId: 'appointment-early',
+      adminId: 'admin-1',
+      result: 'fail',
+      notes: 'Member requested an early outcome',
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.appointment.status).toBe('completed')
+      expect(result.data.appointment.result).toBe('fail')
+    }
   })
 
   it('deactivates an existing availability rule', async () => {

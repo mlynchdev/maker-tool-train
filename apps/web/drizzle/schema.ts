@@ -19,10 +19,20 @@ export const userRoleEnum = pgEnum('user_role', ['member', 'manager', 'admin'])
 export const userStatusEnum = pgEnum('user_status', ['active', 'suspended'])
 export const resourceTypeEnum = pgEnum('resource_type', ['machine', 'tool'])
 export const checkoutAppointmentStatusEnum = pgEnum('checkout_appointment_status', [
-  'scheduled',
+  'pending',
+  'accepted',
+  'rejected',
   'cancelled',
   'completed',
 ])
+export const checkoutAppointmentResultEnum = pgEnum('checkout_appointment_result', [
+  'pass',
+  'fail',
+])
+export const checkoutAppointmentEventTypeEnum = pgEnum(
+  'checkout_appointment_event_type',
+  ['requested', 'accepted', 'rejected', 'passed', 'failed', 'cancelled']
+)
 export const notificationTypeEnum = pgEnum('notification_type', [
   'booking_requested',
   'booking_approved',
@@ -30,6 +40,11 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'booking_cancelled',
   'checkout_appointment_booked',
   'checkout_appointment_cancelled',
+  'checkout_request_submitted',
+  'checkout_request_accepted',
+  'checkout_request_rejected',
+  'checkout_result_passed',
+  'checkout_result_failed',
 ])
 export const reservationStatusEnum = pgEnum('reservation_status', [
   'pending',
@@ -293,8 +308,19 @@ export const checkoutAppointments = pgTable(
     ),
     startTime: timestamp('start_time').notNull(),
     endTime: timestamp('end_time').notNull(),
-    status: checkoutAppointmentStatusEnum('status').default('scheduled').notNull(),
+    status: checkoutAppointmentStatusEnum('status').default('pending').notNull(),
     notes: text('notes'),
+    reviewedBy: uuid('reviewed_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    reviewedAt: timestamp('reviewed_at'),
+    decisionReason: text('decision_reason'),
+    result: checkoutAppointmentResultEnum('result'),
+    resultNotes: text('result_notes'),
+    resultedBy: uuid('resulted_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    resultedAt: timestamp('resulted_at'),
     cancellationReason: text('cancellation_reason'),
     completedAt: timestamp('completed_at'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -313,8 +339,57 @@ export const checkoutAppointments = pgTable(
       table.managerId,
       table.startTime
     ),
+    statusStartIdx: index('checkout_appt_status_start_idx').on(
+      table.status,
+      table.startTime
+    ),
+    statusCreatedIdx: index('checkout_appt_status_created_idx').on(
+      table.status,
+      table.createdAt
+    ),
+    reviewedByIdx: index('checkout_appt_reviewed_by_idx').on(table.reviewedBy),
+    resultedByIdx: index('checkout_appt_resulted_by_idx').on(table.resultedBy),
+    userMachinePendingIdx: uniqueIndex('checkout_appt_user_machine_pending_idx')
+      .on(table.userId, table.machineId)
+      .where(sql`${table.status} = 'pending'`),
     blockIdx: index('checkout_appt_block_idx').on(table.availabilityBlockId),
     ruleIdx: index('checkout_appt_rule_idx').on(table.availabilityRuleId),
+  })
+)
+
+export const checkoutAppointmentEvents = pgTable(
+  'checkout_appointment_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    appointmentId: uuid('appointment_id')
+      .references(() => checkoutAppointments.id, { onDelete: 'cascade' })
+      .notNull(),
+    eventType: checkoutAppointmentEventTypeEnum('event_type').notNull(),
+    actorId: uuid('actor_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    actorRole: userRoleEnum('actor_role'),
+    fromStatus: checkoutAppointmentStatusEnum('from_status'),
+    toStatus: checkoutAppointmentStatusEnum('to_status'),
+    metadata: jsonb('metadata')
+      .$type<Record<string, string | number | boolean | null>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    appointmentCreatedIdx: index('checkout_appt_event_appt_created_idx').on(
+      table.appointmentId,
+      table.createdAt
+    ),
+    actorCreatedIdx: index('checkout_appt_event_actor_created_idx').on(
+      table.actorId,
+      table.createdAt
+    ),
+    eventTypeCreatedIdx: index('checkout_appt_event_type_created_idx').on(
+      table.eventType,
+      table.createdAt
+    ),
   })
 )
 
@@ -385,6 +460,15 @@ export const usersRelations = relations(users, ({ many }) => ({
   }),
   hostedCheckoutAppointments: many(checkoutAppointments, {
     relationName: 'checkoutAppointmentManager',
+  }),
+  reviewedCheckoutAppointments: many(checkoutAppointments, {
+    relationName: 'checkoutAppointmentReviewer',
+  }),
+  resultedCheckoutAppointments: many(checkoutAppointments, {
+    relationName: 'checkoutAppointmentResultedBy',
+  }),
+  checkoutAppointmentEvents: many(checkoutAppointmentEvents, {
+    relationName: 'checkoutAppointmentEventActor',
   }),
   notifications: many(notifications),
   sessions: many(sessions),
@@ -494,32 +578,64 @@ export const checkoutAvailabilityRulesRelations = relations(
   })
 )
 
-export const checkoutAppointmentsRelations = relations(checkoutAppointments, ({ one }) => ({
-  user: one(users, {
-    fields: [checkoutAppointments.userId],
-    references: [users.id],
-    relationName: 'checkoutAppointmentUser',
-  }),
-  manager: one(users, {
-    fields: [checkoutAppointments.managerId],
-    references: [users.id],
-    relationName: 'checkoutAppointmentManager',
-  }),
-  machine: one(machines, {
-    fields: [checkoutAppointments.machineId],
-    references: [machines.id],
-  }),
-  availabilityBlock: one(checkoutAvailabilityBlocks, {
-    fields: [checkoutAppointments.availabilityBlockId],
-    references: [checkoutAvailabilityBlocks.id],
-    relationName: 'appointmentBlock',
-  }),
-  availabilityRule: one(checkoutAvailabilityRules, {
-    fields: [checkoutAppointments.availabilityRuleId],
-    references: [checkoutAvailabilityRules.id],
-    relationName: 'appointmentRule',
-  }),
-}))
+export const checkoutAppointmentsRelations = relations(
+  checkoutAppointments,
+  ({ one, many }) => ({
+    user: one(users, {
+      fields: [checkoutAppointments.userId],
+      references: [users.id],
+      relationName: 'checkoutAppointmentUser',
+    }),
+    manager: one(users, {
+      fields: [checkoutAppointments.managerId],
+      references: [users.id],
+      relationName: 'checkoutAppointmentManager',
+    }),
+    reviewer: one(users, {
+      fields: [checkoutAppointments.reviewedBy],
+      references: [users.id],
+      relationName: 'checkoutAppointmentReviewer',
+    }),
+    resultedByUser: one(users, {
+      fields: [checkoutAppointments.resultedBy],
+      references: [users.id],
+      relationName: 'checkoutAppointmentResultedBy',
+    }),
+    machine: one(machines, {
+      fields: [checkoutAppointments.machineId],
+      references: [machines.id],
+    }),
+    availabilityBlock: one(checkoutAvailabilityBlocks, {
+      fields: [checkoutAppointments.availabilityBlockId],
+      references: [checkoutAvailabilityBlocks.id],
+      relationName: 'appointmentBlock',
+    }),
+    availabilityRule: one(checkoutAvailabilityRules, {
+      fields: [checkoutAppointments.availabilityRuleId],
+      references: [checkoutAvailabilityRules.id],
+      relationName: 'appointmentRule',
+    }),
+    events: many(checkoutAppointmentEvents, {
+      relationName: 'checkoutAppointmentEventAppointment',
+    }),
+  })
+)
+
+export const checkoutAppointmentEventsRelations = relations(
+  checkoutAppointmentEvents,
+  ({ one }) => ({
+    appointment: one(checkoutAppointments, {
+      fields: [checkoutAppointmentEvents.appointmentId],
+      references: [checkoutAppointments.id],
+      relationName: 'checkoutAppointmentEventAppointment',
+    }),
+    actor: one(users, {
+      fields: [checkoutAppointmentEvents.actorId],
+      references: [users.id],
+      relationName: 'checkoutAppointmentEventActor',
+    }),
+  })
+)
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
   user: one(users, {
@@ -555,6 +671,8 @@ export type CheckoutAvailabilityRule = typeof checkoutAvailabilityRules.$inferSe
 export type NewCheckoutAvailabilityRule = typeof checkoutAvailabilityRules.$inferInsert
 export type CheckoutAppointment = typeof checkoutAppointments.$inferSelect
 export type NewCheckoutAppointment = typeof checkoutAppointments.$inferInsert
+export type CheckoutAppointmentEvent = typeof checkoutAppointmentEvents.$inferSelect
+export type NewCheckoutAppointmentEvent = typeof checkoutAppointmentEvents.$inferInsert
 export type Notification = typeof notifications.$inferSelect
 export type NewNotification = typeof notifications.$inferInsert
 export type AppSetting = typeof appSettings.$inferSelect

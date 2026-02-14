@@ -39,7 +39,6 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
   const [refreshing, setRefreshing] = useState(false)
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
 
-  const isManagerOrAdmin = user.role === 'manager' || user.role === 'admin'
   const isAdmin = user.role === 'admin'
 
   const refreshBadges = useCallback(async () => {
@@ -48,7 +47,7 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
     try {
       const unreadPromise = getMyUnreadNotificationCount()
       const reservationsPromise = getReservations({ data: { includesPast: false } })
-      const checkoutPromise = isManagerOrAdmin ? getPendingCheckoutCount() : Promise.resolve({ count: 0 })
+      const checkoutPromise = isAdmin ? getPendingCheckoutCount() : Promise.resolve({ count: 0 })
       const requestPromise = isAdmin ? getPendingReservationRequestCount() : Promise.resolve({ count: 0 })
 
       const [unread, reservations, pendingCheckout, pendingRequests] = await Promise.all([
@@ -78,7 +77,7 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
     } finally {
       setRefreshing(false)
     }
-  }, [isAdmin, isManagerOrAdmin])
+  }, [isAdmin])
 
   useEffect(() => {
     refreshBadges()
