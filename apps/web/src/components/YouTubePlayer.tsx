@@ -1,6 +1,12 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { loadYouTubeIframeAPI } from '~/lib/youtube-iframe'
 import { normalizeYouTubeId } from '~/lib/youtube'
+import {
+  addWatchedRange,
+  getWatchedRangeSeconds,
+  normalizeWatchedRanges,
+  type WatchedRange,
+} from '~/lib/watch-ranges'
 
 declare global {
   interface Window {
@@ -19,12 +25,26 @@ const PAUSED = 2
 
 interface YouTubePlayerProps {
   videoId: string
-  onProgress: (watchedSeconds: number, currentPosition: number, sessionDuration: number, videoDuration: number) => void
+  onProgress: (update: {
+    watchedSeconds: number
+    watchedRanges: WatchedRange[]
+    currentPosition: number
+    sessionDuration: number
+    videoDuration: number
+    ended: boolean
+  }) => void
   initialPosition?: number
   initialWatchedSeconds?: number
+  initialWatchedRanges?: WatchedRange[]
 }
 
-export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initialWatchedSeconds = 0 }: YouTubePlayerProps) {
+export function YouTubePlayer({
+  videoId,
+  onProgress,
+  initialPosition = 0,
+  initialWatchedSeconds = 0,
+  initialWatchedRanges = [],
+}: YouTubePlayerProps) {
   const normalizedVideoId = useMemo(() => normalizeYouTubeId(videoId), [videoId])
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YT.Player | null>(null)
@@ -32,8 +52,21 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
   const [speedWarning, setSpeedWarning] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
 
+  const initialRangesRef = useRef<WatchedRange[]>(
+    initialWatchedRanges.length > 0
+      ? normalizeWatchedRanges(initialWatchedRanges, Number.MAX_SAFE_INTEGER)
+      : initialWatchedSeconds > 0
+        ? [{ start: 0, end: initialWatchedSeconds }]
+        : []
+  )
+
   // Progress tracking refs
-  const watchedSecondsRef = useRef(initialWatchedSeconds)
+  const watchedRangesRef = useRef<WatchedRange[]>(initialRangesRef.current)
+  const watchedSecondsRef = useRef(
+    initialRangesRef.current.length > 0
+      ? getWatchedRangeSeconds(initialRangesRef.current)
+      : initialWatchedSeconds
+  )
   const lastPositionRef = useRef(initialPosition)
   const initialPositionRef = useRef(initialPosition)
   const lastTickWallRef = useRef(0) // wall-clock ms of last tick; 0 = not actively tracking
@@ -59,9 +92,15 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
     // Only credit forward, continuous playback (rejects seeks and backwards jumps)
     if (videoDelta > 0 && videoDelta <= expectedDelta + 2) {
       const duration = player.getDuration() || 0
+      const maxDuration = duration > 0 ? duration : Number.MAX_SAFE_INTEGER
+      watchedRangesRef.current = addWatchedRange(
+        watchedRangesRef.current,
+        { start: lastPositionRef.current, end: currentTime },
+        maxDuration
+      )
       watchedSecondsRef.current = Math.min(
-        watchedSecondsRef.current + videoDelta,
-        duration > 0 ? duration : watchedSecondsRef.current + videoDelta
+        getWatchedRangeSeconds(watchedRangesRef.current),
+        maxDuration
       )
     }
 
@@ -70,19 +109,24 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
   }, [])
 
   // Send current progress to the parent
-  const report = useCallback(() => {
+  const report = useCallback((ended: boolean) => {
     const now = Date.now()
-    const sessionDuration = Math.floor((now - lastReportWallRef.current) / 1000)
+    const sessionDuration = Math.max(
+      1,
+      Math.ceil((now - lastReportWallRef.current) / 1000)
+    )
     lastReportWallRef.current = now
 
     const videoDuration = Math.floor(playerRef.current?.getDuration() || 0)
 
-    onProgressRef.current(
-      Math.floor(watchedSecondsRef.current),
-      Math.floor(lastPositionRef.current),
+    onProgressRef.current({
+      watchedSeconds: Math.floor(watchedSecondsRef.current),
+      watchedRanges: watchedRangesRef.current.map((range) => ({ ...range })),
+      currentPosition: Math.floor(lastPositionRef.current),
       sessionDuration,
-      videoDuration
-    )
+      videoDuration,
+      ended,
+    })
   }, [])
 
   // Interval tick: accumulate time, then report if enough time has passed
@@ -94,7 +138,7 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
 
     const sinceLastReport = (Date.now() - lastReportWallRef.current) / 1000
     if (sinceLastReport >= REPORT_INTERVAL_SECONDS) {
-      report()
+      report(false)
     }
   }, [accumulate, report])
 
@@ -164,13 +208,34 @@ export function YouTubePlayer({ videoId, onProgress, initialPosition = 0, initia
               // Starting or resuming: reset wall-clock baseline so first tick is accurate
               lastTickWallRef.current = Date.now()
               lastPositionRef.current = playerRef.current?.getCurrentTime() || 0
-            } else if (state === PAUSED || state === ENDED) {
+            } else if (state === PAUSED) {
               // Flush any accumulated time since last tick, then report immediately
               if (lastTickWallRef.current > 0) {
                 accumulateRef.current()
-                reportRef.current()
+                reportRef.current(false)
               }
               lastTickWallRef.current = 0 // stop accumulating until next play
+            } else if (state === ENDED) {
+              if (lastTickWallRef.current > 0) {
+                accumulateRef.current()
+              }
+
+              const duration = playerRef.current?.getDuration() || 0
+              if (duration > 0) {
+                watchedRangesRef.current = addWatchedRange(
+                  watchedRangesRef.current,
+                  { start: Math.max(0, duration - 1), end: duration },
+                  duration
+                )
+                watchedSecondsRef.current = Math.min(
+                  getWatchedRangeSeconds(watchedRangesRef.current),
+                  duration
+                )
+                lastPositionRef.current = duration
+              }
+
+              reportRef.current(true)
+              lastTickWallRef.current = 0
             }
           },
           onError: (event: { data: number; target: YT.Player }) => {

@@ -122,6 +122,10 @@ export const trainingProgress = pgTable(
       .references(() => trainingModules.id, { onDelete: 'cascade' })
       .notNull(),
     watchedSeconds: integer('watched_seconds').default(0).notNull(),
+    watchedRanges: jsonb('watched_ranges')
+      .$type<Array<{ start: number; end: number }>>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
     lastPosition: integer('last_position').default(0).notNull(),
     completedAt: timestamp('completed_at'),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),

@@ -2,6 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useRef, useState } from 'react'
+import type { WatchedRange } from '~/lib/watch-ranges'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
 import { normalizeYouTubeId } from '~/lib/youtube'
@@ -59,17 +60,21 @@ function TrainingModulePage() {
   const savingRef = useRef(false)
   const pendingRef = useRef<{
     watchedSeconds: number
+    watchedRanges: WatchedRange[]
     currentPosition: number
     sessionDuration: number
     videoDuration: number
+    ended: boolean
   } | null>(null)
 
   const saveProgress = useCallback(
     async (
       watchedSeconds: number,
+      watchedRanges: WatchedRange[],
       currentPosition: number,
       sessionDuration: number,
-      videoDuration: number
+      videoDuration: number,
+      ended: boolean
     ) => {
       savingRef.current = true
       setSaving(true)
@@ -83,9 +88,11 @@ function TrainingModulePage() {
           data: {
             moduleId: module.id,
             watchedSeconds,
+            watchedRanges,
             currentPosition,
             sessionDuration,
             videoDuration: videoDuration > 0 ? videoDuration : undefined,
+            ended,
           },
         })
 
@@ -106,9 +113,11 @@ function TrainingModulePage() {
         pendingRef.current = null
         await saveProgress(
           pending.watchedSeconds,
+          pending.watchedRanges,
           pending.currentPosition,
           pending.sessionDuration,
-          pending.videoDuration
+          pending.videoDuration,
+          pending.ended
         )
       }
     },
@@ -116,17 +125,50 @@ function TrainingModulePage() {
   )
 
   const handleProgress = useCallback(
-    async (
-      watchedSeconds: number,
-      currentPosition: number,
-      sessionDuration: number,
+    async ({
+      watchedSeconds,
+      watchedRanges,
+      currentPosition,
+      sessionDuration,
+      videoDuration,
+      ended,
+    }: {
+      watchedSeconds: number
+      watchedRanges: WatchedRange[]
+      currentPosition: number
+      sessionDuration: number
       videoDuration: number
-    ) => {
+      ended: boolean
+    }) => {
       if (savingRef.current) {
-        pendingRef.current = { watchedSeconds, currentPosition, sessionDuration, videoDuration }
+        const pending = pendingRef.current
+        pendingRef.current = pending
+          ? {
+              watchedSeconds: Math.max(pending.watchedSeconds, watchedSeconds),
+              watchedRanges,
+              currentPosition,
+              sessionDuration: Math.min(300, pending.sessionDuration + sessionDuration),
+              videoDuration: Math.max(pending.videoDuration, videoDuration),
+              ended: pending.ended || ended,
+            }
+          : {
+              watchedSeconds,
+              watchedRanges,
+              currentPosition,
+              sessionDuration,
+              videoDuration,
+              ended,
+            }
         return
       }
-      await saveProgress(watchedSeconds, currentPosition, sessionDuration, videoDuration)
+      await saveProgress(
+        watchedSeconds,
+        watchedRanges,
+        currentPosition,
+        sessionDuration,
+        videoDuration,
+        ended
+      )
     },
     [saveProgress]
   )
@@ -164,6 +206,7 @@ function TrainingModulePage() {
                 onProgress={handleProgress}
                 initialPosition={progress?.lastPosition || 0}
                 initialWatchedSeconds={progress?.watchedSeconds || 0}
+                initialWatchedRanges={progress?.watchedRanges || []}
               />
             ) : (
               <Alert variant="destructive">
