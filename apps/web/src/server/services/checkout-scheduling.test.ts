@@ -108,6 +108,16 @@ import {
   notifyUserCheckoutAppointmentCancelled,
 } from './notifications'
 
+const WEEKDAY_TO_NUMBER: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+}
+
 function getMinuteOfDayInTimeZone(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -121,6 +131,16 @@ function getMinuteOfDayInTimeZone(date: Date, timeZone: string) {
   const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? '0')
 
   return hour * 60 + minute
+}
+
+function getDayOfWeekInTimeZone(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+  }).formatToParts(date)
+
+  const weekday = parts.find((part) => part.type === 'weekday')?.value ?? 'Sun'
+  return WEEKDAY_TO_NUMBER[weekday] ?? 0
 }
 
 function mockInsertReturning(row: Record<string, unknown>) {
@@ -405,10 +425,11 @@ describe('checkout-scheduling service', () => {
   })
 
   it('matches manager availability using makerspace timezone instead of UTC day/hour', async () => {
-    const slotStartTime = new Date('2026-02-14T01:30:00.000Z')
+    const slotStartTime = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    slotStartTime.setUTCHours(1, 30, 0, 0)
     const appointmentEnd = new Date(slotStartTime.getTime() + 30 * 60 * 1000)
-    const expectedDayOfWeek = 5 // Friday in America/Los_Angeles
-    const expectedStartMinute = 17 * 60 + 30
+    const expectedDayOfWeek = getDayOfWeekInTimeZone(slotStartTime, 'America/Los_Angeles')
+    const expectedStartMinute = getMinuteOfDayInTimeZone(slotStartTime, 'America/Los_Angeles')
     const expectedEndMinute = expectedStartMinute + 30
 
     mocks.getMakerspaceTimezone.mockResolvedValue('America/Los_Angeles')
@@ -477,6 +498,7 @@ describe('checkout-scheduling service', () => {
       slotStartTime,
     })
 
+    expect(expectedDayOfWeek).not.toBe(slotStartTime.getUTCDay())
     expect(result).toEqual({
       success: true,
       data: {
