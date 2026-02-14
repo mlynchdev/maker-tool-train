@@ -15,9 +15,8 @@ import {
   getPendingCheckouts,
   getPendingReservationRequestCount,
   getPendingReservationRequests,
-  getCheckoutAvailability,
 } from '~/server/api/admin'
-import { getMachines } from '~/server/api/machines'
+import { getMachines, getMyUpcomingCheckoutAppointments } from '~/server/api/machines'
 import {
   getNotifications,
   getMyUnreadNotificationCount,
@@ -59,8 +58,8 @@ type PendingCheckoutRow = PendingCheckoutPayload['pendingApprovals'][number]
 type PendingRequestsPayload = Awaited<ReturnType<typeof getPendingReservationRequests>>
 type PendingRequestRow = PendingRequestsPayload['requests'][number]
 
-type CheckoutAvailabilityPayload = Awaited<ReturnType<typeof getCheckoutAvailability>>
-type CheckoutAppointmentRow = CheckoutAvailabilityPayload['appointments'][number]
+type UpcomingCheckoutPayload = Awaited<ReturnType<typeof getMyUpcomingCheckoutAppointments>>
+type UpcomingCheckoutRow = UpcomingCheckoutPayload['appointments'][number]
 
 interface QueueItem {
   id: string
@@ -149,27 +148,37 @@ export function Dashboard({ user }: DashboardProps) {
   const [pendingRequestCount, setPendingRequestCount] = useState(0)
   const [pendingApprovals, setPendingApprovals] = useState<PendingCheckoutRow[]>([])
   const [pendingRequests, setPendingRequests] = useState<PendingRequestRow[]>([])
-  const [checkoutAppointments, setCheckoutAppointments] = useState<CheckoutAppointmentRow[]>([])
+  const [upcomingCheckoutAppointments, setUpcomingCheckoutAppointments] = useState<UpcomingCheckoutRow[]>([])
 
-  const isManagerOrAdmin = user.role === 'manager' || user.role === 'admin'
   const isAdmin = user.role === 'admin'
 
   const loadDashboardData = useCallback(async () => {
     setRefreshing(true)
 
     try {
+      const rangeStart = new Date()
+      const rangeEnd = new Date(rangeStart)
+      rangeEnd.setDate(rangeEnd.getDate() + 21)
+
       const [
         unreadResult,
         notificationsResult,
         trainingResult,
         reservationsResult,
         machinesResult,
+        upcomingCheckoutsResult,
       ] = await Promise.all([
         getMyUnreadNotificationCount(),
         getNotifications({ data: { limit: 10 } }),
         getTrainingStatus(),
         getReservations({ data: { includesPast: true } }),
         getMachines(),
+        getMyUpcomingCheckoutAppointments({
+          data: {
+            startDate: rangeStart.toISOString(),
+            endDate: rangeEnd.toISOString(),
+          },
+        }),
       ])
 
       setUnreadNotifications(unreadResult.count)
@@ -177,41 +186,28 @@ export function Dashboard({ user }: DashboardProps) {
       setTrainingStatus(trainingResult)
       setReservations(asArray(reservationsResult.reservations))
       setMachines(asArray(machinesResult.machines))
-
-      if (isManagerOrAdmin) {
-        const rangeStart = new Date()
-        const rangeEnd = new Date(rangeStart)
-        rangeEnd.setDate(rangeEnd.getDate() + 2)
-
-        const [checkoutCountResult, pendingCheckoutsResult, availabilityResult] = await Promise.all([
-          getPendingCheckoutCount(),
-          getPendingCheckouts(),
-          getCheckoutAvailability({
-            data: {
-              startDate: rangeStart.toISOString(),
-              endDate: rangeEnd.toISOString(),
-            },
-          }),
-        ])
-
-        setPendingCheckoutCount(checkoutCountResult.count)
-        setPendingApprovals(asArray(pendingCheckoutsResult.pendingApprovals))
-        setCheckoutAppointments(asArray(availabilityResult.appointments))
-      } else {
-        setPendingCheckoutCount(0)
-        setPendingApprovals([])
-        setCheckoutAppointments([])
-      }
+      setUpcomingCheckoutAppointments(asArray(upcomingCheckoutsResult.appointments))
 
       if (isAdmin) {
-        const [requestCountResult, requestResult] = await Promise.all([
+        const [
+          checkoutCountResult,
+          pendingCheckoutsResult,
+          requestCountResult,
+          requestResult,
+        ] = await Promise.all([
+          getPendingCheckoutCount(),
+          getPendingCheckouts(),
           getPendingReservationRequestCount(),
           getPendingReservationRequests(),
         ])
 
+        setPendingCheckoutCount(checkoutCountResult.count)
+        setPendingApprovals(asArray(pendingCheckoutsResult.pendingApprovals))
         setPendingRequestCount(requestCountResult.count)
         setPendingRequests(asArray(requestResult.requests))
       } else {
+        setPendingCheckoutCount(0)
+        setPendingApprovals([])
         setPendingRequestCount(0)
         setPendingRequests([])
       }
@@ -221,7 +217,7 @@ export function Dashboard({ user }: DashboardProps) {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [isAdmin, isManagerOrAdmin])
+  }, [isAdmin])
 
   useEffect(() => {
     loadDashboardData()
@@ -317,31 +313,35 @@ export function Dashboard({ user }: DashboardProps) {
       startsAt: item.startTime,
     }))
 
-    const checkoutEvents: TimelineItem[] = checkoutAppointments.slice(0, 6).map((item) => ({
-      id: `checkout-${item.id}`,
-      title: item.machine.name,
-      subtitle: `Checkout with ${item.user.name || item.user.email}`,
-      kind: 'checkout',
-      startsAt: item.startTime,
-    }))
+    const checkoutEvents: TimelineItem[] = upcomingCheckoutAppointments
+      .slice(0, 6)
+      .map((item) => ({
+        id: `checkout-${item.id}`,
+        title: item.machine.name,
+        subtitle:
+          user.role === 'member'
+            ? `Checkout with ${item.manager.name || item.manager.email}`
+            : `Checkout for ${item.user.name || item.user.email}`,
+        kind: 'checkout',
+        startsAt: item.startTime,
+      }))
 
     return [...reservationEvents, ...checkoutEvents]
       .sort((left, right) => toDate(left.startsAt).getTime() - toDate(right.startsAt).getTime())
       .slice(0, 10)
-  }, [checkoutAppointments, reservationSummary.upcoming])
+  }, [reservationSummary.upcoming, upcomingCheckoutAppointments, user.role])
 
   const queueItems = useMemo(() => {
     const approvalItems: QueueItem[] = pendingApprovals.slice(0, 8).map((item) => ({
-      id: `approval-${item.user.id}-${item.machine.id}`,
-      title: 'Checkout approval required',
+      id: `approval-${item.appointmentId}`,
+      title: 'Checkout request pending',
       subtitle: `${item.user.name || item.user.email}`,
-      description: `${item.machine.name} is ready for final checkout`,
+      description: `${item.machine.name} · ${formatCompact(item.startTime)}`,
       kind: 'approval',
       priority: 2,
       action: {
-        label: 'Review member',
-        to: '/admin/checkouts/$userId',
-        params: { userId: item.user.id },
+        label: 'Review queue',
+        to: '/admin/checkouts',
       },
     }))
 
@@ -460,7 +460,7 @@ export function Dashboard({ user }: DashboardProps) {
               <Button asChild size="sm">
                 <Link to="/machines">New reservation</Link>
               </Button>
-              {isManagerOrAdmin && (
+              {isAdmin && (
                 <Button asChild size="sm" variant="outline">
                   <Link to="/admin/checkouts">Open checkout queue</Link>
                 </Button>
@@ -500,7 +500,7 @@ export function Dashboard({ user }: DashboardProps) {
             <CardTitle className="text-2xl">{trainingStatus?.overallProgress ?? 0}%</CardTitle>
           </CardHeader>
         </Card>
-        {isManagerOrAdmin && (
+        {isAdmin && (
           <Card className="bg-card/80">
             <CardHeader className="pb-2">
               <CardDescription>Checkout queue</CardDescription>
@@ -599,7 +599,7 @@ export function Dashboard({ user }: DashboardProps) {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-muted-foreground">No upcoming events scheduled in the next two days.</p>
+              <p className="text-sm text-muted-foreground">No upcoming events scheduled in the next three weeks.</p>
             )}
           </CardContent>
         </Card>

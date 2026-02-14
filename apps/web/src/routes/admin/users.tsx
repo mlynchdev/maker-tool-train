@@ -336,7 +336,7 @@ function AdminUsersPage() {
           </p>
           {!canEditUsers && (
             <p className="mt-2 text-sm text-muted-foreground">
-              Managers can update checkout access. Role, status, and deletion changes are admin-only.
+              Checkout access, role, status, and deletion actions are admin-only.
             </p>
           )}
         </section>
@@ -588,7 +588,7 @@ function AdminUsersPage() {
               <CardTitle className="text-base">Member Checkout Access</CardTitle>
             </div>
             <CardDescription>
-              Grant or revoke per-resource checkout access for active members.
+              Admins can grant or revoke per-resource checkout access for active members.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -624,7 +624,7 @@ function AdminUsersPage() {
                             const key = buildCheckoutKey(member.id, machine.id)
                             const checkedOut = checkoutKeys.has(key)
                             const isUpdating = updatingCheckoutKey === key
-                            const disabled = member.status !== 'active' || isUpdating
+                            const disabled = member.status !== 'active' || isUpdating || !canEditUsers
 
                             return (
                               <div
@@ -657,11 +657,13 @@ function AdminUsersPage() {
                                     onClick={() => handleToggleCheckout(member.id, machine.id)}
                                     disabled={disabled}
                                   >
-                                    {isUpdating
-                                      ? 'Saving...'
-                                      : checkedOut
-                                        ? 'Revoke checkout'
-                                        : 'Grant checkout'}
+                                    {!canEditUsers
+                                      ? 'Admin only'
+                                      : isUpdating
+                                        ? 'Saving...'
+                                        : checkedOut
+                                          ? 'Revoke checkout'
+                                          : 'Grant checkout'}
                                   </Button>
                                   {renderActionNotice(checkoutNoticeKey(key))}
                                 </div>

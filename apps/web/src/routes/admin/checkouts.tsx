@@ -1,18 +1,18 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { eq } from 'drizzle-orm'
-import { useCallback, useEffect, useState } from 'react'
-import { requireManager } from '~/server/auth/middleware'
-import { db, users, machines } from '~/lib/db'
-import { checkEligibility } from '~/server/services/eligibility'
+import { asc, eq, inArray } from 'drizzle-orm'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { requireAdmin } from '~/server/auth/middleware'
+import { checkoutAppointments, db } from '~/lib/db'
 import { getAdminCheckoutAvailability } from '~/server/services/checkout-scheduling'
 import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
 import { getNotificationsForUser } from '~/server/services/notifications'
 import {
-  approveCheckout,
   cancelCheckoutAppointment,
   createCheckoutAvailabilityBlock,
   deactivateCheckoutAvailabilityBlock,
+  finalizeCheckoutMeeting,
+  moderateCheckoutRequest,
 } from '~/server/api/admin'
 import { markMyNotificationRead } from '~/server/api/notifications'
 import { parseSSEMessage } from '~/lib/sse'
@@ -27,6 +27,11 @@ const DAY_OPTIONS = [
   { value: 6, label: 'Saturday' },
 ] as const
 
+const CHECKOUT_QUEUE_STATUSES = ['pending', 'accepted', 'rejected'] as const
+
+type CheckoutQueueStatus = (typeof CHECKOUT_QUEUE_STATUSES)[number]
+type QueueFilter = 'all' | CheckoutQueueStatus
+
 function formatMinuteOfDay(value: number) {
   const hours24 = Math.floor(value / 60)
   const minutes = value % 60
@@ -36,62 +41,35 @@ function formatMinuteOfDay(value: number) {
 }
 
 const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await requireManager()
+  const user = await requireAdmin()
 
-  const allUsers = await db.query.users.findMany({
-    where: eq(users.role, 'member'),
-    with: {
-      managerCheckouts: {
-        with: {
-          machine: true,
-        },
+  const [queueItems, checkoutAvailability, unreadNotifications] = await Promise.all([
+    db.query.checkoutAppointments.findMany({
+      where: inArray(checkoutAppointments.status, [...CHECKOUT_QUEUE_STATUSES]),
+      with: {
+        user: true,
+        machine: true,
+        manager: true,
+        reviewer: true,
+        resultedByUser: true,
       },
-    },
-  })
-
-  const allMachines = await db.query.machines.findMany({
-    where: eq(machines.active, true),
-  })
-
-  const pendingApprovals = []
-
-  for (const member of allUsers) {
-    if (member.status !== 'active') continue
-
-    for (const machine of allMachines) {
-      const hasCheckout = member.managerCheckouts.some((c) => c.machineId === machine.id)
-      if (hasCheckout) continue
-
-      const eligibility = await checkEligibility(member.id, machine.id)
-      const trainingComplete = eligibility.requirements.every((r) => r.completed)
-
-      if (trainingComplete) {
-        pendingApprovals.push({
-          user: {
-            id: member.id,
-            email: member.email,
-            name: member.name,
-          },
-          machine: {
-            id: machine.id,
-            name: machine.name,
-          },
-          trainingStatus: eligibility.requirements,
-        })
-      }
-    }
-  }
-
-  const checkoutAvailability = await getAdminCheckoutAvailability({
-    managerId: user.id,
-    startTime: new Date(),
-    endTime: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000),
-  })
-
-  const unreadNotifications = await getNotificationsForUser(user.id, true, 25)
+      orderBy: [asc(checkoutAppointments.startTime)],
+      limit: 400,
+    }),
+    getAdminCheckoutAvailability({
+      managerId: user.id,
+      startTime: new Date(),
+      endTime: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    }),
+    getNotificationsForUser(user.id, true, 50),
+  ])
 
   const relevantNotificationTypes = [
-    'checkout_appointment_booked',
+    'checkout_request_submitted',
+    'checkout_request_accepted',
+    'checkout_request_rejected',
+    'checkout_result_passed',
+    'checkout_result_failed',
     'checkout_appointment_cancelled',
   ]
 
@@ -102,9 +80,8 @@ const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
   return {
     user,
     makerspaceTimezone: await getMakerspaceTimezone(),
-    pendingApprovals,
+    checkoutQueue: queueItems,
     checkoutAvailabilityRules: checkoutAvailability.rules,
-    checkoutAppointments: checkoutAvailability.appointments,
     roleNotifications,
   }
 })
@@ -118,21 +95,20 @@ export const Route = createFileRoute('/admin/checkouts')({
 
 function CheckoutsPage() {
   const {
-    user,
     makerspaceTimezone: initialMakerspaceTimezone,
-    pendingApprovals: initialApprovals,
+    checkoutQueue: initialCheckoutQueue,
     checkoutAvailabilityRules: initialAvailabilityRules,
-    checkoutAppointments: initialCheckoutAppointments,
     roleNotifications: initialRoleNotifications,
   } = Route.useLoaderData()
 
-  const [pendingApprovals, setPendingApprovals] = useState(initialApprovals)
-  const [approving, setApproving] = useState<string | null>(null)
-
+  const [checkoutQueue, setCheckoutQueue] = useState(initialCheckoutQueue)
   const [availabilityRules, setAvailabilityRules] = useState(initialAvailabilityRules)
-  const [checkoutAppointments, setCheckoutAppointments] = useState(initialCheckoutAppointments)
   const [roleNotifications, setRoleNotifications] = useState(initialRoleNotifications)
   const [makerspaceTimezone, setMakerspaceTimezone] = useState(initialMakerspaceTimezone)
+
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>('pending')
+  const [queueSearch, setQueueSearch] = useState('')
+  const [actingId, setActingId] = useState<string | null>(null)
 
   const [selectedDayOfWeek, setSelectedDayOfWeek] = useState(6)
   const [ruleStartTime, setRuleStartTime] = useState('14:00')
@@ -141,11 +117,8 @@ function CheckoutsPage() {
 
   const [creatingRule, setCreatingRule] = useState(false)
   const [deactivatingRuleId, setDeactivatingRuleId] = useState<string | null>(null)
-  const [cancellingAppointmentId, setCancellingAppointmentId] = useState<string | null>(null)
   const [availabilityMessage, setAvailabilityMessage] = useState('')
   const [markingNotificationId, setMarkingNotificationId] = useState<string | null>(null)
-
-  const now = new Date()
 
   const formatDateTime = (value: Date) =>
     new Date(value).toLocaleString('en-US', {
@@ -159,16 +132,28 @@ function CheckoutsPage() {
     })
 
   const getNotificationTypeLabel = (type: string) => {
-    if (type === 'checkout_appointment_booked') return 'Checkout appointment'
+    if (type === 'checkout_request_submitted') return 'Checkout request'
+    if (type === 'checkout_request_accepted') return 'Request accepted'
+    if (type === 'checkout_request_rejected') return 'Request rejected'
+    if (type === 'checkout_result_passed') return 'Checkout passed'
+    if (type === 'checkout_result_failed') return 'Checkout failed'
     if (type === 'checkout_appointment_cancelled') return 'Checkout cancellation'
     return 'Notification'
   }
 
+  const getStatusBadgeClass = (status: string) => {
+    if (status === 'pending') return 'badge badge-warning'
+    if (status === 'accepted') return 'badge badge-success'
+    if (status === 'rejected') return 'badge badge-danger'
+    if (status === 'completed') return 'badge badge-info'
+    if (status === 'cancelled') return 'badge badge-secondary'
+    return 'badge badge-danger'
+  }
+
   const refreshAdminData = useCallback(async () => {
     const latest = await getCheckoutsData()
-    setPendingApprovals(latest.pendingApprovals)
+    setCheckoutQueue(latest.checkoutQueue)
     setAvailabilityRules(latest.checkoutAvailabilityRules)
-    setCheckoutAppointments(latest.checkoutAppointments)
     setRoleNotifications(latest.roleNotifications)
     setMakerspaceTimezone(latest.makerspaceTimezone)
   }, [])
@@ -194,28 +179,114 @@ function CheckoutsPage() {
     setRoleNotifications([])
   }
 
-  const handleApprove = async (userId: string, machineId: string) => {
-    const key = `${userId}-${machineId}`
-    setApproving(key)
+  const handleModerateRequest = async (
+    appointmentId: string,
+    decision: 'accept' | 'reject'
+  ) => {
+    let reason: string | undefined
+
+    if (decision === 'reject') {
+      const value = prompt('Rejection reason (required):')?.trim()
+      if (!value) return
+      reason = value
+    }
+
+    setActingId(`${appointmentId}:${decision}`)
 
     try {
-      const result = await approveCheckout({ data: { userId, machineId } })
+      const result = await moderateCheckoutRequest({
+        data: {
+          appointmentId,
+          decision,
+          reason,
+        },
+      })
 
-      if (result.success) {
-        setPendingApprovals((prev) =>
-          prev.filter((a) => !(a.user.id === userId && a.machine.id === machineId))
-        )
-      } else {
-        alert(result.error || 'Failed to approve checkout')
+      if (!result.success) {
+        alert(result.error || 'Unable to update checkout request')
+        return
       }
+
+      await refreshAdminData()
     } catch {
-      alert('An error occurred')
+      alert('Unable to update checkout request')
     } finally {
-      setApproving(null)
+      setActingId(null)
     }
   }
 
-  const handleCreateAvailabilityRule = async (e: React.FormEvent) => {
+  const handleFinalize = async (
+    appointmentId: string,
+    resultType: 'pass' | 'fail',
+    startTime: Date
+  ) => {
+    if (startTime > new Date()) {
+      const confirmed = confirm(
+        `This meeting is scheduled for ${formatDateTime(
+          startTime
+        )} and has not started yet. Record a ${resultType} result now?`
+      )
+      if (!confirmed) return
+    }
+
+    const notes = prompt(
+      resultType === 'pass'
+        ? 'Optional notes for pass:'
+        : 'Optional notes for fail (member can retry later):'
+    )
+
+    setActingId(`${appointmentId}:${resultType}`)
+
+    try {
+      const result = await finalizeCheckoutMeeting({
+        data: {
+          appointmentId,
+          result: resultType,
+          notes: notes?.trim() || undefined,
+        },
+      })
+
+      if (!result.success) {
+        alert(result.error || 'Unable to finalize checkout meeting')
+        return
+      }
+
+      await refreshAdminData()
+    } catch {
+      alert('Unable to finalize checkout meeting')
+    } finally {
+      setActingId(null)
+    }
+  }
+
+  const handleCancelAcceptedMeeting = async (appointmentId: string) => {
+    const reason = prompt('Cancellation reason (required):')?.trim()
+    if (!reason) return
+
+    setActingId(`${appointmentId}:cancel`)
+
+    try {
+      const result = await cancelCheckoutAppointment({
+        data: {
+          appointmentId,
+          reason,
+        },
+      })
+
+      if (!result.success) {
+        alert(result.error || 'Unable to cancel checkout meeting')
+        return
+      }
+
+      await refreshAdminData()
+    } catch {
+      alert('Unable to cancel checkout meeting')
+    } finally {
+      setActingId(null)
+    }
+  }
+
+  const handleCreateAvailabilityRule = async (e: FormEvent) => {
     e.preventDefault()
     setCreatingRule(true)
     setAvailabilityMessage('')
@@ -276,33 +347,6 @@ function CheckoutsPage() {
     }
   }
 
-  const handleCancelAppointment = async (appointmentId: string) => {
-    const reason = prompt('Optional cancellation reason:') || undefined
-    setCancellingAppointmentId(appointmentId)
-    setAvailabilityMessage('')
-
-    try {
-      const result = await cancelCheckoutAppointment({
-        data: {
-          appointmentId,
-          reason,
-        },
-      })
-
-      if (!result.success) {
-        setAvailabilityMessage(result.error || 'Failed to cancel appointment.')
-        return
-      }
-
-      setCheckoutAppointments((prev) => prev.filter((item) => item.id !== appointmentId))
-      setAvailabilityMessage('Checkout appointment cancelled.')
-    } catch {
-      setAvailabilityMessage('Failed to cancel appointment.')
-    } finally {
-      setCancellingAppointmentId(null)
-    }
-  }
-
   useEffect(() => {
     const source = new EventSource('/api/sse/bookings')
 
@@ -329,17 +373,61 @@ function CheckoutsPage() {
     }
   }, [refreshAdminData])
 
+  const filteredQueue = useMemo(() => {
+    const query = queueSearch.trim().toLowerCase()
+
+    return checkoutQueue.filter((item) => {
+      if (queueFilter !== 'all' && item.status !== queueFilter) {
+        return false
+      }
+
+      if (!query) return true
+
+      const values = [
+        item.user.name || '',
+        item.user.email,
+        item.machine.name,
+        item.manager.name || '',
+        item.manager.email,
+        item.decisionReason || '',
+        item.status,
+      ]
+
+      return values.some((value) => value.toLowerCase().includes(query))
+    })
+  }, [checkoutQueue, queueFilter, queueSearch])
+
+  const counts = useMemo(() => {
+    let pending = 0
+    let accepted = 0
+    let rejected = 0
+
+    for (const item of checkoutQueue) {
+      if (item.status === 'pending') pending++
+      if (item.status === 'accepted') accepted++
+      if (item.status === 'rejected') rejected++
+    }
+
+    return {
+      pending,
+      accepted,
+      rejected,
+      total: checkoutQueue.length,
+    }
+  }, [checkoutQueue])
+
   return (
     <div>
       <main className="main">
         <div className="container">
-          <h1 className="mb-3">Checkout Approvals</h1>
+          <h1 className="mb-2">Checkout Queue</h1>
+          <p className="text-small text-muted mb-2">
+            One unified queue for pending, accepted, and rejected checkout requests.
+          </p>
 
           <div className="card mb-2">
             <div className="card-header">
-              <h3 className="card-title">
-                {user.role === 'admin' ? 'Admin Alerts' : 'Manager Alerts'}
-              </h3>
+              <h3 className="card-title">Admin Alerts</h3>
               {roleNotifications.length > 0 && (
                 <button className="btn btn-secondary" onClick={handleMarkAllNotificationsRead}>
                   Mark all read
@@ -377,9 +465,7 @@ function CheckoutsPage() {
                             onClick={() => handleMarkNotificationRead(notification.id)}
                             disabled={markingNotificationId === notification.id}
                           >
-                            {markingNotificationId === notification.id
-                              ? 'Saving...'
-                              : 'Mark read'}
+                            {markingNotificationId === notification.id ? 'Saving...' : 'Mark read'}
                           </button>
                         </td>
                       </tr>
@@ -392,50 +478,161 @@ function CheckoutsPage() {
             )}
           </div>
 
-          {pendingApprovals.length > 0 ? (
-            <div className="card">
+          <div className="card mb-2">
+            <div className="flex flex-between flex-center" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div className="flex gap-1" style={{ flexWrap: 'wrap' }}>
+                <span className="badge badge-warning">{counts.pending} pending</span>
+                <span className="badge badge-success">{counts.accepted} accepted</span>
+                <span className="badge badge-danger">{counts.rejected} rejected</span>
+                <span className="badge badge-info">{counts.total} total</span>
+              </div>
+
+              <input
+                type="text"
+                className="form-input"
+                style={{ minWidth: '240px' }}
+                placeholder="Search member, machine, manager"
+                value={queueSearch}
+                onChange={(event) => setQueueSearch(event.target.value)}
+              />
+            </div>
+
+            <div className="flex gap-1 mt-2" style={{ flexWrap: 'wrap' }}>
+              <button
+                className={`btn ${queueFilter === 'pending' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('pending')}
+              >
+                Pending
+              </button>
+              <button
+                className={`btn ${queueFilter === 'accepted' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('accepted')}
+              >
+                Accepted
+              </button>
+              <button
+                className={`btn ${queueFilter === 'rejected' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('rejected')}
+              >
+                Rejected
+              </button>
+              <button
+                className={`btn ${queueFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('all')}
+              >
+                All
+              </button>
+              <button className="btn btn-secondary" onClick={refreshAdminData}>
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <div className="card mb-3">
+            <h3 className="card-title mb-2">Checkout Request Queue</h3>
+            {filteredQueue.length > 0 ? (
               <div className="table-wrapper">
                 <table className="table table-mobile-cards">
                   <thead>
                     <tr>
+                      <th>Status</th>
                       <th>Member</th>
                       <th>Machine</th>
-                      <th>Training Status</th>
+                      <th>Start</th>
+                      <th>Manager</th>
+                      <th>Decision</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {pendingApprovals.map((approval) => {
-                      const key = `${approval.user.id}-${approval.machine.id}`
+                    {filteredQueue.map((item) => {
+                      const itemStartTime = new Date(item.startTime)
+                      const started = itemStartTime <= new Date()
+
                       return (
-                        <tr key={key}>
+                        <tr key={item.id}>
+                          <td data-label="Status">
+                            <span className={getStatusBadgeClass(item.status)}>{item.status}</span>
+                          </td>
                           <td data-label="Member">
-                            <div>{approval.user.name || approval.user.email}</div>
-                            {approval.user.name && (
-                              <div className="text-small text-muted">{approval.user.email}</div>
+                            <div>{item.user.name || item.user.email}</div>
+                            {item.user.name && (
+                              <div className="text-small text-muted">{item.user.email}</div>
                             )}
                           </td>
-                          <td data-label="Machine">{approval.machine.name}</td>
-                          <td data-label="Training Status">
-                            <span className="badge badge-success">All training complete</span>
+                          <td data-label="Machine">{item.machine.name}</td>
+                          <td data-label="Start">{formatDateTime(item.startTime)}</td>
+                          <td data-label="Manager">{item.manager.name || item.manager.email}</td>
+                          <td data-label="Decision">
+                            {item.status === 'rejected' ? (
+                              <div className="text-small">
+                                <div>{item.decisionReason || 'No reason provided'}</div>
+                                {item.reviewer && (
+                                  <div className="text-muted">
+                                    by {item.reviewer.name || item.reviewer.email}
+                                  </div>
+                                )}
+                              </div>
+                            ) : item.status === 'accepted' ? (
+                              <div className="text-small text-muted">
+                                {item.reviewer
+                                  ? `Accepted by ${item.reviewer.name || item.reviewer.email}`
+                                  : 'Accepted'}
+                              </div>
+                            ) : (
+                              <div className="text-small text-muted">Awaiting review</div>
+                            )}
                           </td>
                           <td data-label="Actions">
-                            <div className="flex gap-1">
-                              <button
-                                className="btn btn-success"
-                                onClick={() => handleApprove(approval.user.id, approval.machine.id)}
-                                disabled={approving === key}
-                              >
-                                {approving === key ? 'Approving...' : 'Approve'}
-                              </button>
-                              <Link
-                                to="/admin/checkouts/$userId"
-                                params={{ userId: approval.user.id }}
-                                className="btn btn-secondary"
-                              >
-                                View Details
-                              </Link>
-                            </div>
+                            {item.status === 'pending' ? (
+                              <div className="flex gap-1">
+                                <button
+                                  className="btn btn-success"
+                                  onClick={() => handleModerateRequest(item.id, 'accept')}
+                                  disabled={actingId === `${item.id}:accept`}
+                                >
+                                  {actingId === `${item.id}:accept` ? 'Saving...' : 'Accept'}
+                                </button>
+                                <button
+                                  className="btn btn-danger"
+                                  onClick={() => handleModerateRequest(item.id, 'reject')}
+                                  disabled={actingId === `${item.id}:reject`}
+                                >
+                                  {actingId === `${item.id}:reject` ? 'Saving...' : 'Reject'}
+                                </button>
+                              </div>
+                            ) : item.status === 'accepted' ? (
+                              <div className="space-y-1">
+                                <div className="flex gap-1">
+                                  <button
+                                    className="btn btn-success"
+                                    onClick={() => handleFinalize(item.id, 'pass', itemStartTime)}
+                                    disabled={actingId === `${item.id}:pass`}
+                                  >
+                                    {actingId === `${item.id}:pass` ? 'Saving...' : 'Pass'}
+                                  </button>
+                                  <button
+                                    className="btn btn-danger"
+                                    onClick={() => handleFinalize(item.id, 'fail', itemStartTime)}
+                                    disabled={actingId === `${item.id}:fail`}
+                                  >
+                                    {actingId === `${item.id}:fail` ? 'Saving...' : 'Fail'}
+                                  </button>
+                                  <button
+                                    className="btn btn-secondary"
+                                    onClick={() => handleCancelAcceptedMeeting(item.id)}
+                                    disabled={actingId === `${item.id}:cancel`}
+                                  >
+                                    {actingId === `${item.id}:cancel` ? 'Saving...' : 'Cancel'}
+                                  </button>
+                                </div>
+                                {!started && (
+                                  <span className="text-small text-muted">Meeting not started</span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-small text-muted">No actions</span>
+                            )}
                           </td>
                         </tr>
                       )
@@ -443,37 +640,29 @@ function CheckoutsPage() {
                   </tbody>
                 </table>
               </div>
-            </div>
-          ) : (
-            <div className="card">
-              <p className="text-center text-muted">No pending checkout approvals.</p>
-              <p className="text-center text-small text-muted mt-1">
-                Members will appear here once they complete all required training for a machine.
-              </p>
-            </div>
-          )}
+            ) : (
+              <p className="text-muted text-small">No checkout requests match this filter.</p>
+            )}
+          </div>
 
-          {user.role === 'admin' && (
-            <div className="card mb-2">
-              <div className="flex flex-between flex-center" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-                <p className="text-small text-muted">
-                  Reservation request moderation now has a dedicated queue.
-                </p>
-                <Link
-                  to="/admin/booking-requests"
-                  search={{ view: 'pending', q: '' }}
-                  className="btn btn-secondary"
-                >
-                  Open Booking Requests
-                </Link>
-              </div>
+          <div className="card mb-2">
+            <div className="flex flex-between flex-center" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+              <p className="text-small text-muted">
+                Reservation request moderation has its own queue.
+              </p>
+              <Link
+                to="/admin/booking-requests"
+                search={{ view: 'pending', q: '' }}
+                className="btn btn-secondary"
+              >
+                Open Booking Requests
+              </Link>
             </div>
-          )}
+          </div>
 
           <h2 className="mt-3 mb-2">Recurring Checkout Availability</h2>
           <p className="text-small text-muted mb-2">
-            Availability and appointment times use timezone: <strong>{makerspaceTimezone}</strong>
-            {user.role === 'admin' ? ' (change in Admin Settings).' : '.'}
+            Availability times use timezone: <strong>{makerspaceTimezone}</strong> (change in Admin Settings).
           </p>
           <div className="card mb-2">
             <h3 className="card-title mb-2">Add Weekly Availability Rule</h3>
@@ -536,7 +725,7 @@ function CheckoutsPage() {
             </form>
           </div>
 
-          <div className="card mb-2">
+          <div className="card">
             <h3 className="card-title mb-2">Recurring Rules</h3>
             {availabilityRules.length > 0 ? (
               <div className="table-wrapper">
@@ -583,54 +772,8 @@ function CheckoutsPage() {
               </div>
             ) : (
               <p className="text-muted text-small">
-                No recurring rules yet. Add one above so members can book in-person final checkout slots.
+                No recurring rules yet. Add one above so members can request in-person checkout slots.
               </p>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 className="card-title mb-2">Scheduled Checkout Appointments</h3>
-            {checkoutAppointments.length > 0 ? (
-              <div className="table-wrapper">
-                <table className="table table-mobile-cards">
-                  <thead>
-                    <tr>
-                      <th>Member</th>
-                      <th>Resource</th>
-                      <th>Start</th>
-                      <th>End</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {checkoutAppointments.map((appointment) => (
-                      <tr key={appointment.id}>
-                        <td data-label="Member">{appointment.user.name || appointment.user.email}</td>
-                        <td data-label="Resource">{appointment.machine.name}</td>
-                        <td data-label="Start">{formatDateTime(appointment.startTime)}</td>
-                        <td data-label="End">{formatDateTime(appointment.endTime)}</td>
-                        <td data-label="Actions">
-                          {new Date(appointment.startTime) > now ? (
-                            <button
-                              className="btn btn-danger"
-                              onClick={() => handleCancelAppointment(appointment.id)}
-                              disabled={cancellingAppointmentId === appointment.id}
-                            >
-                              {cancellingAppointmentId === appointment.id
-                                ? 'Cancelling...'
-                                : 'Cancel'}
-                            </button>
-                          ) : (
-                            <span className="text-small text-muted">Started</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-muted text-small">No scheduled checkout appointments.</p>
             )}
           </div>
         </div>

@@ -9,9 +9,8 @@ import {
   getPendingCheckouts,
   getPendingReservationRequestCount,
   getPendingReservationRequests,
-  getCheckoutAvailability,
 } from '~/server/api/admin'
-import { getMachines } from '~/server/api/machines'
+import { getMachines, getMyUpcomingCheckoutAppointments } from '~/server/api/machines'
 import { getMyUnreadNotificationCount, getNotifications } from '~/server/api/notifications'
 import { getReservations } from '~/server/api/reservations'
 import { getTrainingStatus } from '~/server/api/training'
@@ -26,11 +25,11 @@ vi.mock('~/server/api/admin', () => ({
   getPendingCheckouts: vi.fn(),
   getPendingReservationRequestCount: vi.fn(),
   getPendingReservationRequests: vi.fn(),
-  getCheckoutAvailability: vi.fn(),
 }))
 
 vi.mock('~/server/api/machines', () => ({
   getMachines: vi.fn(),
+  getMyUpcomingCheckoutAppointments: vi.fn(),
 }))
 
 vi.mock('~/server/api/notifications', () => ({
@@ -83,10 +82,13 @@ describe('Dashboard', () => {
     vi.mocked(getPendingCheckouts).mockResolvedValue({ pendingApprovals: [] })
     vi.mocked(getPendingReservationRequestCount).mockResolvedValue({ count: 0 })
     vi.mocked(getPendingReservationRequests).mockResolvedValue({ requests: [] })
+    vi.mocked(getMyUpcomingCheckoutAppointments).mockResolvedValue({ appointments: [] })
   })
 
-  it('does not crash when checkout availability payload omits appointments', async () => {
-    vi.mocked(getCheckoutAvailability).mockResolvedValue({} as Awaited<ReturnType<typeof getCheckoutAvailability>>)
+  it('does not crash when upcoming checkout payload omits appointments', async () => {
+    vi.mocked(getMyUpcomingCheckoutAppointments).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof getMyUpcomingCheckoutAppointments>>
+    )
 
     render(
       <Dashboard
@@ -100,12 +102,12 @@ describe('Dashboard', () => {
     )
 
     await waitFor(() => {
-      expect(getCheckoutAvailability).toHaveBeenCalled()
+      expect(getMyUpcomingCheckoutAppointments).toHaveBeenCalled()
     })
 
     expect(await screen.findByText('Main Dashboard')).toBeInTheDocument()
     expect(
-      await screen.findByText('No upcoming events scheduled in the next two days.')
+      await screen.findByText('No upcoming events scheduled in the next three weeks.')
     ).toBeInTheDocument()
   })
 })

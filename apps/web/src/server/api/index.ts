@@ -11,6 +11,8 @@ export {
   getMachineEligibility,
   getMachineAvailability,
   getMachineCheckoutAvailability,
+  getMyUpcomingCheckoutAppointments,
+  cancelMyCheckoutAppointment,
   requestCheckoutAppointment,
   reserveMachine,
 } from './machines'
@@ -41,6 +43,8 @@ export {
   createCheckoutAvailabilityBlock,
   deactivateCheckoutAvailabilityBlock,
   cancelCheckoutAppointment,
+  moderateCheckoutRequest,
+  finalizeCheckoutMeeting,
   createMachine,
   updateMachine,
   setMachineRequirements,

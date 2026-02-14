@@ -7,8 +7,10 @@ import { checkEligibility, getMachineRequirements } from '../services/eligibilit
 import { getMachineBookingsInRange } from '../services/booking-conflicts'
 import { createBookingRequest } from '../services/booking-workflow'
 import {
-  bookCheckoutAppointment,
+  cancelCheckoutAppointmentByManager,
+  requestCheckoutAppointment as requestCheckoutAppointmentService,
   getAvailableCheckoutSlots,
+  getUpcomingCheckoutAppointmentsForUser,
 } from '../services/checkout-scheduling'
 
 export const getMachines = createServerFn({ method: 'GET' }).handler(async () => {
@@ -198,11 +200,60 @@ export const requestCheckoutAppointment = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireAuth()
 
-    return bookCheckoutAppointment({
+    return requestCheckoutAppointmentService({
       userId: user.id,
       machineId: data.machineId,
       managerId: data.managerId,
       slotStartTime: new Date(data.slotStartTime),
       notes: data.notes,
+    })
+  })
+
+export const getMyUpcomingCheckoutAppointments = createServerFn({ method: 'GET' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        startDate: z.string().datetime().optional(),
+        endDate: z.string().datetime().optional(),
+      })
+      .optional()
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const user = await requireAuth()
+
+    const startTime = data?.startDate ? new Date(data.startDate) : new Date()
+    const endTime = data?.endDate
+      ? new Date(data.endDate)
+      : new Date(Date.now() + 21 * 24 * 60 * 60 * 1000)
+
+    const appointments = await getUpcomingCheckoutAppointmentsForUser({
+      userId: user.id,
+      role: user.role,
+      startTime,
+      endTime,
+    })
+
+    return { appointments }
+  })
+
+export const cancelMyCheckoutAppointment = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        appointmentId: z.string().uuid(),
+        reason: z.string().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const user = await requireAuth()
+
+    return cancelCheckoutAppointmentByManager({
+      appointmentId: data.appointmentId,
+      managerId: user.id,
+      actorRole: 'member',
+      actorName: user.name || user.email,
+      reason: data.reason,
     })
   })
