@@ -19,13 +19,19 @@ BEGIN
       WHERE t.typname = 'checkout_appointment_status'
         AND e.enumlabel = 'scheduled'
     ) THEN
-      CREATE TYPE checkout_appointment_status_new AS ENUM (
-        'pending',
-        'accepted',
-        'rejected',
-        'cancelled',
-        'completed'
-      );
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_type
+        WHERE typname = 'checkout_appointment_status_new'
+      ) THEN
+        CREATE TYPE checkout_appointment_status_new AS ENUM (
+          'pending',
+          'accepted',
+          'rejected',
+          'cancelled',
+          'completed'
+        );
+      END IF;
 
       ALTER TABLE checkout_appointments
       ALTER COLUMN status DROP DEFAULT;
@@ -40,6 +46,28 @@ BEGIN
           ELSE 'pending'
         END::checkout_appointment_status_new
       );
+
+      IF to_regclass('public.checkout_appointment_events') IS NOT NULL THEN
+        ALTER TABLE checkout_appointment_events
+        ALTER COLUMN from_status TYPE checkout_appointment_status_new
+        USING (
+          CASE
+            WHEN from_status IS NULL THEN NULL
+            WHEN from_status::text = 'scheduled' THEN 'accepted'
+            ELSE from_status::text
+          END::checkout_appointment_status_new
+        );
+
+        ALTER TABLE checkout_appointment_events
+        ALTER COLUMN to_status TYPE checkout_appointment_status_new
+        USING (
+          CASE
+            WHEN to_status IS NULL THEN NULL
+            WHEN to_status::text = 'scheduled' THEN 'accepted'
+            ELSE to_status::text
+          END::checkout_appointment_status_new
+        );
+      END IF;
 
       DROP TYPE checkout_appointment_status;
       ALTER TYPE checkout_appointment_status_new RENAME TO checkout_appointment_status;
