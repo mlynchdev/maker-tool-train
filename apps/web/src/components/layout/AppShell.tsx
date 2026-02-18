@@ -3,6 +3,7 @@ import type { AuthUser } from '~/server/auth/types'
 import { AppSidebar } from '~/components/layout/AppSidebar'
 import { AppTopbar } from '~/components/layout/AppTopbar'
 import { ShellProvider } from '~/components/layout/ShellContext'
+import { useBookingsSSEInvalidation } from '~/lib/query/useBookingsSSEInvalidation'
 import { cn } from '~/lib/utils'
 
 interface AppShellProps {
@@ -13,6 +14,7 @@ interface AppShellProps {
 
 export function AppShell({ user, pathname, children }: AppShellProps) {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  useBookingsSSEInvalidation()
 
   useEffect(() => {
     setMobileSidebarOpen(false)

@@ -1,11 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { getPendingCheckoutCount, getPendingReservationRequestCount } from '~/server/api/admin'
-import { getMyUnreadNotificationCount } from '~/server/api/notifications'
-import { getReservations } from '~/server/api/reservations'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react'
+import { queryKeys } from '~/lib/query/keys'
+import {
+  pendingCheckoutCountQueryOptions,
+  pendingReservationRequestCountQueryOptions,
+  reservationsListQueryOptions,
+  unreadNotificationCountQueryOptions,
+} from '~/lib/query/options'
 import type { AuthUser } from '~/server/auth/types'
-import { parseSSEMessage } from '~/lib/sse'
 
 const ACTIVE_RESERVATION_STATUSES = ['pending', 'approved', 'confirmed'] as const
+const SHELL_RESERVATIONS_OPTIONS = { includesPast: true } as const
 
 interface ShellBadges {
   unreadNotifications: number
@@ -30,84 +35,85 @@ interface ShellProviderProps {
 }
 
 export function ShellProvider({ user, children }: ShellProviderProps) {
-  const [badges, setBadges] = useState<ShellBadges>({
-    unreadNotifications: 0,
-    pendingCheckoutCount: 0,
-    pendingRequestCount: 0,
-    activeReservationCount: 0,
-  })
-  const [refreshing, setRefreshing] = useState(false)
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
-
+  const queryClient = useQueryClient()
   const isAdmin = user.role === 'admin'
 
+  const unreadCountQuery = useQuery(unreadNotificationCountQueryOptions())
+  const reservationsQuery = useQuery(reservationsListQueryOptions(SHELL_RESERVATIONS_OPTIONS))
+  const pendingCheckoutCountQuery = useQuery({
+    ...pendingCheckoutCountQueryOptions(),
+    enabled: isAdmin,
+  })
+  const pendingRequestCountQuery = useQuery({
+    ...pendingReservationRequestCountQueryOptions(),
+    enabled: isAdmin,
+  })
+
+  const badges = useMemo<ShellBadges>(() => {
+    const now = new Date()
+    const reservations = reservationsQuery.data?.reservations ?? []
+
+    const activeReservationCount = reservations.filter((reservation) => {
+      return (
+        ACTIVE_RESERVATION_STATUSES.includes(
+          reservation.status as (typeof ACTIVE_RESERVATION_STATUSES)[number]
+        ) &&
+        new Date(reservation.endTime) > now
+      )
+    }).length
+
+    return {
+      unreadNotifications: unreadCountQuery.data?.count ?? 0,
+      pendingCheckoutCount: pendingCheckoutCountQuery.data?.count ?? 0,
+      pendingRequestCount: pendingRequestCountQuery.data?.count ?? 0,
+      activeReservationCount,
+    }
+  }, [
+    pendingCheckoutCountQuery.data?.count,
+    pendingRequestCountQuery.data?.count,
+    reservationsQuery.data?.reservations,
+    unreadCountQuery.data?.count,
+  ])
+
   const refreshBadges = useCallback(async () => {
-    setRefreshing(true)
+    const invalidations = [
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.notifications.unreadCount(),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.reservations.mine(SHELL_RESERVATIONS_OPTIONS),
+      }),
+    ]
 
-    try {
-      const unreadPromise = getMyUnreadNotificationCount()
-      const reservationsPromise = getReservations({ data: { includesPast: false } })
-      const checkoutPromise = isAdmin ? getPendingCheckoutCount() : Promise.resolve({ count: 0 })
-      const requestPromise = isAdmin ? getPendingReservationRequestCount() : Promise.resolve({ count: 0 })
-
-      const [unread, reservations, pendingCheckout, pendingRequests] = await Promise.all([
-        unreadPromise,
-        reservationsPromise,
-        checkoutPromise,
-        requestPromise,
-      ])
-
-      const now = new Date()
-      const activeReservationCount = reservations.reservations.filter((reservation) => {
-        return (
-          ACTIVE_RESERVATION_STATUSES.includes(
-            reservation.status as (typeof ACTIVE_RESERVATION_STATUSES)[number]
-          ) &&
-          new Date(reservation.endTime) > now
-        )
-      }).length
-
-      setBadges({
-        unreadNotifications: unread.count,
-        pendingCheckoutCount: pendingCheckout.count,
-        pendingRequestCount: pendingRequests.count,
-        activeReservationCount,
-      })
-      setLastRefreshedAt(new Date())
-    } finally {
-      setRefreshing(false)
-    }
-  }, [isAdmin])
-
-  useEffect(() => {
-    refreshBadges()
-  }, [refreshBadges])
-
-  useEffect(() => {
-    const source = new EventSource('/api/sse/bookings')
-
-    source.onmessage = (event) => {
-      const message = parseSSEMessage(event.data)
-      if (!message) return
-      if (message.type === 'connected') return
-
-      if (
-        message.event === 'notification' ||
-        message.event === 'checkout' ||
-        message.event === 'booking'
-      ) {
-        refreshBadges()
-      }
+    if (isAdmin) {
+      invalidations.push(
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingCheckoutCount(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingReservationRequestCount(),
+        })
+      )
     }
 
-    source.onerror = () => {
-      source.close()
-    }
+    await Promise.all(invalidations)
+  }, [isAdmin, queryClient])
 
-    return () => {
-      source.close()
-    }
-  }, [refreshBadges])
+  const refreshTimestamps = [
+    unreadCountQuery.dataUpdatedAt,
+    reservationsQuery.dataUpdatedAt,
+    pendingCheckoutCountQuery.dataUpdatedAt,
+    pendingRequestCountQuery.dataUpdatedAt,
+  ].filter((value) => value > 0)
+
+  const lastRefreshedAt =
+    refreshTimestamps.length > 0 ? new Date(Math.max(...refreshTimestamps)) : null
+
+  const refreshing =
+    unreadCountQuery.isFetching ||
+    reservationsQuery.isFetching ||
+    (isAdmin && pendingCheckoutCountQuery.isFetching) ||
+    (isAdmin && pendingRequestCountQuery.isFetching)
 
   const value = useMemo(
     () => ({

@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { createElement, type ReactNode } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Dashboard } from './Dashboard'
@@ -57,6 +58,29 @@ class MockEventSource {
 }
 
 describe('Dashboard', () => {
+  const renderDashboard = () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    })
+
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <Dashboard
+          user={{
+            id: 'manager-user',
+            email: 'manager@example.com',
+            name: null,
+            role: 'manager',
+          }}
+        />
+      </QueryClientProvider>
+    )
+  }
+
   beforeEach(() => {
     ;(globalThis as unknown as { EventSource: typeof EventSource }).EventSource = MockEventSource as unknown as typeof EventSource
 
@@ -90,24 +114,17 @@ describe('Dashboard', () => {
       {} as Awaited<ReturnType<typeof getMyUpcomingCheckoutAppointments>>
     )
 
-    render(
-      <Dashboard
-        user={{
-          id: 'manager-user',
-          email: 'manager@example.com',
-          name: null,
-          role: 'manager',
-        }}
-      />
-    )
+    renderDashboard()
 
     await waitFor(() => {
       expect(getMyUpcomingCheckoutAppointments).toHaveBeenCalled()
     })
 
-    expect(await screen.findByText('Main Dashboard')).toBeInTheDocument()
     expect(
-      await screen.findByText('No upcoming events scheduled in the next three weeks.')
+      await screen.findByRole('heading', { name: 'Action Queue' })
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByText('No queue items match your search.')
     ).toBeInTheDocument()
   })
 })

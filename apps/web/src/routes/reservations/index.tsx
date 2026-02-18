@@ -1,71 +1,173 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/react-start'
-import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
-import { checkoutAppointments, db, reservations } from '~/lib/db'
-import { parseSSEMessage } from '~/lib/sse'
-import { requireAuth } from '~/server/auth/middleware'
-import { cancelMyCheckoutAppointment } from '~/server/api/machines'
-import { cancelReservation } from '~/server/api/reservations'
+import { queryKeys } from '~/lib/query/keys'
+import {
+  myUpcomingCheckoutAppointmentsQueryOptions,
+  reservationsListQueryOptions,
+} from '~/lib/query/options'
+import {
+  cancelMyCheckoutAppointment,
+  type getMyUpcomingCheckoutAppointments,
+} from '~/server/api/machines'
+import { cancelReservation, type getReservations } from '~/server/api/reservations'
 
-const getReservationsData = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await requireAuth()
-  const now = new Date()
+const RESERVATIONS_QUERY_OPTIONS = { includesPast: true } as const
+const ACTIVE_RESERVATION_STATUSES = ['pending', 'approved', 'confirmed'] as const
 
-  const userReservations = await db.query.reservations.findMany({
-    where: eq(reservations.userId, user.id),
-    with: {
-      machine: true,
-    },
-    orderBy: [desc(reservations.startTime)],
-  })
-
-  const userCheckoutAppointments = await db.query.checkoutAppointments.findMany({
-    where: and(
-      eq(checkoutAppointments.userId, user.id),
-      inArray(checkoutAppointments.status, ['pending', 'accepted']),
-      gt(checkoutAppointments.startTime, now)
-    ),
-    with: {
-      machine: true,
-      manager: true,
-    },
-    orderBy: [asc(checkoutAppointments.startTime)],
-  })
-
-  return {
-    reservations: userReservations,
-    checkoutAppointments: userCheckoutAppointments,
-  }
-})
+type ReservationsPayload = Awaited<ReturnType<typeof getReservations>>
+type UpcomingCheckoutPayload = Awaited<
+  ReturnType<typeof getMyUpcomingCheckoutAppointments>
+>
 
 export const Route = createFileRoute('/reservations/')({
   component: ReservationsPage,
-  loader: async () => {
-    return await getReservationsData()
-  },
 })
 
 function ReservationsPage() {
-  const {
-    reservations: initialReservations,
-    checkoutAppointments: initialCheckoutAppointments,
-  } = Route.useLoaderData()
-  const [reservationsList, setReservationsList] = useState(initialReservations)
-  const [checkoutAppointmentsList, setCheckoutAppointmentsList] = useState(
-    initialCheckoutAppointments
-  )
+  const queryClient = useQueryClient()
   const [cancelling, setCancelling] = useState<string | null>(null)
   const [cancellingCheckoutId, setCancellingCheckoutId] = useState<string | null>(null)
 
+  const reservationsQuery = useQuery(
+    reservationsListQueryOptions(RESERVATIONS_QUERY_OPTIONS)
+  )
+  const checkoutAppointmentsQuery = useQuery(
+    myUpcomingCheckoutAppointmentsQueryOptions()
+  )
+
+  const reservationsList = reservationsQuery.data?.reservations ?? []
+  const checkoutAppointmentsList = checkoutAppointmentsQuery.data?.appointments ?? []
+
+  const loading =
+    typeof reservationsQuery.data === 'undefined' &&
+    typeof checkoutAppointmentsQuery.data === 'undefined' &&
+    (reservationsQuery.isPending || checkoutAppointmentsQuery.isPending)
+
   const refreshReservations = useCallback(async () => {
-    const latest = await getReservationsData()
-    setReservationsList(latest.reservations)
-    setCheckoutAppointmentsList(latest.checkoutAppointments)
-  }, [])
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.machines.myUpcomingCheckoutAppointments(),
+      }),
+    ])
+  }, [queryClient])
+
+  const cancelReservationMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to cancel reservation',
+    },
+    mutationFn: async (variables: { reservationId: string }) => {
+      const result = await cancelReservation({ data: variables })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to cancel reservation')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS),
+      })
+
+      const previousReservations = queryClient.getQueryData<ReservationsPayload>(
+        queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS)
+      )
+
+      queryClient.setQueryData<ReservationsPayload>(
+        queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            reservations: current.reservations.map((reservation) =>
+              reservation.id === variables.reservationId
+                ? { ...reservation, status: 'cancelled' as const }
+                : reservation
+            ),
+          }
+        }
+      )
+
+      return { previousReservations }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousReservations) {
+        queryClient.setQueryData(
+          queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS),
+          context.previousReservations
+        )
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS),
+      })
+    },
+  })
+
+  const cancelCheckoutAppointmentMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to cancel checkout appointment',
+    },
+    mutationFn: async (variables: { appointmentId: string; reason?: string }) => {
+      const result = await cancelMyCheckoutAppointment({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to cancel checkout appointment')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.machines.myUpcomingCheckoutAppointments(),
+      })
+
+      const previousAppointments = queryClient.getQueryData<UpcomingCheckoutPayload>(
+        queryKeys.machines.myUpcomingCheckoutAppointments()
+      )
+
+      queryClient.setQueryData<UpcomingCheckoutPayload>(
+        queryKeys.machines.myUpcomingCheckoutAppointments(),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            appointments: current.appointments.filter(
+              (appointment) => appointment.id !== variables.appointmentId
+            ),
+          }
+        }
+      )
+
+      return { previousAppointments }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousAppointments) {
+        queryClient.setQueryData(
+          queryKeys.machines.myUpcomingCheckoutAppointments(),
+          context.previousAppointments
+        )
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.machines.myUpcomingCheckoutAppointments(),
+      })
+    },
+  })
 
   const formatDateTime = (date: Date) => {
     return new Date(date).toLocaleString('en-US', {
@@ -93,19 +195,11 @@ function ReservationsPage() {
     setCancelling(reservationId)
 
     try {
-      const result = await cancelReservation({ data: { reservationId } })
-
-      if (result.success) {
-        setReservationsList((prev) =>
-          prev.map((reservation) =>
-            reservation.id === reservationId ? { ...reservation, status: 'cancelled' as const } : reservation
-          )
-        )
-      } else {
-        alert(result.error || 'Failed to cancel reservation')
-      }
+      await cancelReservationMutation.mutateAsync({
+        reservationId,
+      })
     } catch {
-      alert('An error occurred')
+      // Error handling and rollback is managed in mutation callbacks.
     } finally {
       setCancelling(null)
     }
@@ -118,60 +212,53 @@ function ReservationsPage() {
     setCancellingCheckoutId(appointmentId)
 
     try {
-      const result = await cancelMyCheckoutAppointment({
-        data: {
-          appointmentId,
-          reason: reason || undefined,
-        },
+      await cancelCheckoutAppointmentMutation.mutateAsync({
+        appointmentId,
+        reason: reason || undefined,
       })
-
-      if (result.success) {
-        setCheckoutAppointmentsList((prev) =>
-          prev.filter((appointment) => appointment.id !== appointmentId)
-        )
-      } else {
-        alert(result.error || 'Failed to cancel checkout appointment')
-      }
     } catch {
-      alert('An error occurred')
+      // Error handling and rollback is managed in mutation callbacks.
     } finally {
       setCancellingCheckoutId(null)
     }
   }
 
-  const activeStatuses = ['pending', 'approved', 'confirmed']
-
-  useEffect(() => {
-    const source = new EventSource('/api/sse/bookings')
-
-    source.onmessage = (event) => {
-      const message = parseSSEMessage(event.data)
-      if (!message) return
-      if (message.type === 'connected') return
-
-      if (message.event === 'booking' || message.event === 'checkout') {
-        refreshReservations()
-      }
-    }
-
-    source.onerror = () => {
-      source.close()
-    }
-
-    return () => {
-      source.close()
-    }
-  }, [refreshReservations])
-
   const upcomingReservations = reservationsList.filter(
-    (reservation) => activeStatuses.includes(reservation.status) && new Date(reservation.startTime) > new Date()
+    (reservation) =>
+      ACTIVE_RESERVATION_STATUSES.includes(
+        reservation.status as (typeof ACTIVE_RESERVATION_STATUSES)[number]
+      ) && new Date(reservation.startTime) > new Date()
   )
 
   const historyReservations = reservationsList.filter(
-    (reservation) => !activeStatuses.includes(reservation.status) || new Date(reservation.startTime) <= new Date()
+    (reservation) =>
+      !ACTIVE_RESERVATION_STATUSES.includes(
+        reservation.status as (typeof ACTIVE_RESERVATION_STATUSES)[number]
+      ) || new Date(reservation.startTime) <= new Date()
   )
 
-  const cancelledCount = reservationsList.filter((reservation) => reservation.status === 'cancelled').length
+  const cancelledCount = reservationsList.filter(
+    (reservation) => reservation.status === 'cancelled'
+  ).length
+
+  if (loading) {
+    return <QueryLoadingScreen message="Loading reservations..." />
+  }
+
+  if (
+    typeof reservationsQuery.data === 'undefined' &&
+    typeof checkoutAppointmentsQuery.data === 'undefined' &&
+    (reservationsQuery.isError || checkoutAppointmentsQuery.isError)
+  ) {
+    return (
+      <QueryErrorScreen
+        message="Unable to load reservations right now."
+        onRetry={() => {
+          void refreshReservations()
+        }}
+      />
+    )
+  }
 
   return (
     <div className="min-h-screen">

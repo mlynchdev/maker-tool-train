@@ -6,11 +6,14 @@ import {
   createRootRoute,
   useLocation,
 } from '@tanstack/react-router'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { createServerFn } from '@tanstack/react-start'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import appStylesHref from '../styles.css?url'
 import { AppShell } from '~/components/layout/AppShell'
 import { Button } from '~/components/ui/button'
+import { ToastViewport, useErrorToasts } from '~/components/ui/toaster'
+import { createQueryClient } from '~/lib/query/client'
 import { getAuthUser } from '~/server/auth/middleware'
 
 const getRootUser = createServerFn({ method: 'GET' }).handler(async () => {
@@ -61,18 +64,29 @@ export const Route = createRootRoute({
 function RootComponent() {
   const { user } = Route.useLoaderData()
   const location = useLocation()
+  const { toasts, pushErrorToast, dismissToast } = useErrorToasts()
+  const [queryClient] = useState(() =>
+    createQueryClient({
+      onErrorNotification: ({ message }) => {
+        pushErrorToast({ description: message })
+      },
+    })
+  )
 
   const shouldRenderShell = Boolean(user) && isAuthenticatedShellPath(location.pathname)
 
   return (
     <RootDocument>
-      {shouldRenderShell ? (
-        <AppShell user={user!} pathname={location.pathname}>
+      <QueryClientProvider client={queryClient}>
+        {shouldRenderShell ? (
+          <AppShell user={user!} pathname={location.pathname}>
+            <Outlet />
+          </AppShell>
+        ) : (
           <Outlet />
-        </AppShell>
-      ) : (
-        <Outlet />
-      )}
+        )}
+        <ToastViewport toasts={toasts} onDismiss={dismissToast} />
+      </QueryClientProvider>
     </RootDocument>
   )
 }

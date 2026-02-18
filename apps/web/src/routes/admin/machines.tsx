@@ -1,16 +1,24 @@
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { Outlet, createFileRoute, Link, useChildMatches } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
 import { Plus, Search, Wrench } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { requireManager } from '~/server/auth/middleware'
-import { db, machines } from '~/lib/db'
-import { createMachine, updateMachine } from '~/server/api/admin'
+import { useMemo, useState, type FormEvent } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
 import { Label } from '~/components/ui/label'
+import { db, machines } from '~/lib/db'
+import { queryKeys } from '~/lib/query/keys'
+import { createMachine, updateMachine } from '~/server/api/admin'
+import { requireManager } from '~/server/auth/middleware'
 
 const TRAINING_DURATION_OPTIONS = [
   { value: 15, label: '15 minutes' },
@@ -36,28 +44,38 @@ const getAdminMachinesData = createServerFn({ method: 'GET' }).handler(async () 
   return { user, machines: machineList }
 })
 
+type AdminMachinesData = Awaited<ReturnType<typeof getAdminMachinesData>>
+
+const adminMachinesDataQueryOptions = queryOptions({
+  queryKey: queryKeys.admin.machines(),
+  queryFn: () => getAdminMachinesData(),
+})
+
 export const Route = createFileRoute('/admin/machines')({
   component: AdminMachinesPage,
-  loader: async () => {
-    return await getAdminMachinesData()
-  },
 })
+
+function sortByName<T extends { name: string }>(items: T[]) {
+  return [...items].sort((left, right) => left.name.localeCompare(right.name))
+}
 
 function AdminMachinesPage() {
   const childMatches = useChildMatches()
-  const { user, machines: initialMachines } = Route.useLoaderData()
-  const [machineList, setMachineList] = useState(initialMachines)
-  const [showCreate, setShowCreate] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [machineQuery, setMachineQuery] = useState('')
+  const queryClient = useQueryClient()
 
+  const adminMachinesQuery = useQuery({
+    ...adminMachinesDataQueryOptions,
+    enabled: childMatches.length === 0,
+  })
+
+  const [showCreate, setShowCreate] = useState(false)
+  const [machineQuery, setMachineQuery] = useState('')
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
-  const [newResourceType, setNewResourceType] = useState<'machine' | 'tool'>(
-    'machine'
-  )
+  const [newResourceType, setNewResourceType] = useState<'machine' | 'tool'>('machine')
   const [newTrainingDurationMinutes, setNewTrainingDurationMinutes] = useState(30)
-
+  const [togglingMachineId, setTogglingMachineId] = useState<string | null>(null)
+  const machineList = adminMachinesQuery.data?.machines ?? []
   const normalizedQuery = machineQuery.trim().toLowerCase()
 
   const filteredMachines = useMemo(() => {
@@ -75,55 +93,144 @@ function AdminMachinesPage() {
     })
   }, [machineList, normalizedQuery])
 
-  const activeMachines = filteredMachines.filter((machine) => machine.active)
-  const inactiveMachines = filteredMachines.filter((machine) => !machine.active)
+  const createMachineMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to create machine',
+    },
+    mutationFn: async (variables: {
+      name: string
+      description?: string
+      resourceType: 'machine' | 'tool'
+      trainingDurationMinutes: number
+    }) => {
+      const result = await createMachine({ data: variables })
+      if (!result.success || !result.machine) {
+        throw new Error('Failed to create machine')
+      }
+      return result.machine
+    },
+    onSuccess: (machine) => {
+      queryClient.setQueryData<AdminMachinesData>(
+        queryKeys.admin.machines(),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            machines: sortByName([
+              ...current.machines,
+              {
+                ...machine,
+                requirements: [],
+              },
+            ]),
+          }
+        }
+      )
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.machines() })
+    },
+  })
+
+  const toggleMachineMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to update machine',
+    },
+    mutationFn: async (variables: { machineId: string; active: boolean }) => {
+      const result = await updateMachine({ data: variables })
+      if (!result.success) {
+        throw new Error('Failed to update machine')
+      }
+      return result
+    },
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.admin.machines() })
+      const previousData = queryClient.getQueryData<AdminMachinesData>(
+        queryKeys.admin.machines()
+      )
+
+      queryClient.setQueryData<AdminMachinesData>(
+        queryKeys.admin.machines(),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            machines: current.machines.map((machine) =>
+              machine.id === variables.machineId
+                ? { ...machine, active: variables.active }
+                : machine
+            ),
+          }
+        }
+      )
+
+      return { previousData }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(queryKeys.admin.machines(), context.previousData)
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.machines() })
+    },
+  })
 
   if (childMatches.length > 0) {
     return <Outlet />
   }
 
-  const handleCreate = async (e: React.FormEvent) => {
+  if (adminMachinesQuery.isPending && typeof adminMachinesQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading machine administration..." />
+  }
+
+  if (adminMachinesQuery.isError && typeof adminMachinesQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load machine administration data."
+        onRetry={() => {
+          void adminMachinesQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const user = adminMachinesQuery.data?.user
+  const activeMachines = filteredMachines.filter((machine) => machine.active)
+  const inactiveMachines = filteredMachines.filter((machine) => !machine.active)
+
+  const handleCreate = async (e: FormEvent) => {
     e.preventDefault()
-    setSaving(true)
 
     try {
-      const result = await createMachine({
-        data: {
-          name: newName,
-          description: newDescription || undefined,
-          resourceType: newResourceType,
-          trainingDurationMinutes: newTrainingDurationMinutes,
-        },
+      await createMachineMutation.mutateAsync({
+        name: newName,
+        description: newDescription || undefined,
+        resourceType: newResourceType,
+        trainingDurationMinutes: newTrainingDurationMinutes,
       })
 
-      if (result.success && result.machine) {
-        setMachineList((prev) => [...prev, { ...result.machine, requirements: [] }])
-        setNewName('')
-        setNewDescription('')
-        setNewResourceType('machine')
-        setNewTrainingDurationMinutes(30)
-        setShowCreate(false)
-      }
+      setNewName('')
+      setNewDescription('')
+      setNewResourceType('machine')
+      setNewTrainingDurationMinutes(30)
+      setShowCreate(false)
     } catch {
-      alert('Failed to create machine')
-    } finally {
-      setSaving(false)
+      // Error handling is managed by centralized mutation handlers.
     }
   }
 
   const handleToggleActive = async (machineId: string, active: boolean) => {
-    try {
-      const result = await updateMachine({
-        data: { machineId, active },
-      })
+    setTogglingMachineId(machineId)
 
-      if (result.success) {
-        setMachineList((prev) =>
-          prev.map((m) => (m.id === machineId ? { ...m, active } : m))
-        )
-      }
+    try {
+      await toggleMachineMutation.mutateAsync({ machineId, active })
     } catch {
-      alert('Failed to update machine')
+      // Error handling and rollback is managed in mutation callbacks.
+    } finally {
+      setTogglingMachineId(null)
     }
   }
 
@@ -181,8 +288,13 @@ function AdminMachinesPage() {
             variant={machine.active ? 'destructive' : 'default'}
             size="sm"
             onClick={() => handleToggleActive(machine.id, !machine.active)}
+            disabled={togglingMachineId === machine.id}
           >
-            {machine.active ? 'Deactivate' : 'Activate'}
+            {togglingMachineId === machine.id
+              ? 'Saving...'
+              : machine.active
+                ? 'Deactivate'
+                : 'Activate'}
           </Button>
         </div>
       </CardContent>
@@ -200,7 +312,7 @@ function AdminMachinesPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {user.role === 'admin' && (
+            {user?.role === 'admin' && (
               <Button asChild variant="outline">
                 <Link to="/admin/training">Manage training modules</Link>
               </Button>
@@ -299,8 +411,8 @@ function AdminMachinesPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <Button type="submit" disabled={saving}>
-                    {saving ? 'Creating...' : 'Create resource'}
+                  <Button type="submit" disabled={createMachineMutation.isPending}>
+                    {createMachineMutation.isPending ? 'Creating...' : 'Create resource'}
                   </Button>
                   <Button type="button" variant="outline" onClick={() => setShowCreate(false)}>
                     Cancel

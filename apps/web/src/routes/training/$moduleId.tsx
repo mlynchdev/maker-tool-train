@@ -1,19 +1,22 @@
+import { queryOptions, useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
-import { useCallback, useRef, useState } from 'react'
-import type { WatchedRange } from '~/lib/watch-ranges'
-import { requireAuth } from '~/server/auth/middleware'
-import { db, trainingModules } from '~/lib/db'
-import { normalizeYouTubeId } from '~/lib/youtube'
-import { getModuleProgress } from '~/server/services/training'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { YouTubePlayer } from '~/components/YouTubePlayer'
-import { updateProgress } from '~/server/api/training'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { Progress } from '~/components/ui/progress'
+import { db, trainingModules } from '~/lib/db'
+import { queryKeys } from '~/lib/query/keys'
+import type { WatchedRange } from '~/lib/watch-ranges'
+import { normalizeYouTubeId } from '~/lib/youtube'
+import { updateProgress } from '~/server/api/training'
+import { requireAuth } from '~/server/auth/middleware'
+import { getModuleProgress } from '~/server/services/training'
 
 const getModuleData = createServerFn({ method: 'GET' })
   .inputValidator((data: { moduleId: string }) => data)
@@ -46,16 +49,21 @@ const getModuleData = createServerFn({ method: 'GET' })
     return { module, progress, hasValidVideoId: Boolean(normalizedVideoId) }
   })
 
+const trainingModuleDataQueryOptions = (moduleId: string) =>
+  queryOptions({
+    queryKey: queryKeys.training.module(moduleId),
+    queryFn: () => getModuleData({ data: { moduleId } }),
+  })
+
 export const Route = createFileRoute('/training/$moduleId')({
   component: TrainingModulePage,
-  loader: async ({ params }) => {
-    return await getModuleData({ data: { moduleId: params.moduleId } })
-  },
 })
 
 function TrainingModulePage() {
-  const { module, progress, hasValidVideoId } = Route.useLoaderData()
-  const [currentProgress, setCurrentProgress] = useState(progress?.percentComplete || 0)
+  const { moduleId } = Route.useParams()
+  const moduleQuery = useQuery(trainingModuleDataQueryOptions(moduleId))
+
+  const [currentProgress, setCurrentProgress] = useState(0)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
   const pendingRef = useRef<{
@@ -66,6 +74,34 @@ function TrainingModulePage() {
     videoDuration: number
     ended: boolean
   } | null>(null)
+
+  useEffect(() => {
+    const nextProgress = moduleQuery.data?.progress?.percentComplete || 0
+    setCurrentProgress(nextProgress)
+  }, [moduleId, moduleQuery.data?.progress?.percentComplete])
+
+  if (moduleQuery.isPending && typeof moduleQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading training module..." />
+  }
+
+  if (moduleQuery.isError && typeof moduleQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load this training module."
+        onRetry={() => {
+          void moduleQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const module = moduleQuery.data?.module
+  const progress = moduleQuery.data?.progress
+  const hasValidVideoId = moduleQuery.data?.hasValidVideoId ?? false
+
+  if (!module) {
+    return <QueryErrorScreen message="Training module not found." />
+  }
 
   const saveProgress = useCallback(
     async (
@@ -80,7 +116,10 @@ function TrainingModulePage() {
       setSaving(true)
 
       const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
-      const localPercent = Math.min(Math.floor((watchedSeconds / displayDuration) * 100), 100)
+      const localPercent = Math.min(
+        Math.floor((watchedSeconds / displayDuration) * 100),
+        100
+      )
       setCurrentProgress(localPercent)
 
       try {
@@ -121,7 +160,7 @@ function TrainingModulePage() {
         )
       }
     },
-    [module.id, module.durationSeconds]
+    [module.durationSeconds, module.id]
   )
 
   const handleProgress = useCallback(
@@ -161,6 +200,7 @@ function TrainingModulePage() {
             }
         return
       }
+
       await saveProgress(
         watchedSeconds,
         watchedRanges,
@@ -183,9 +223,9 @@ function TrainingModulePage() {
         <section className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">{module.title}</h1>
-            {module.description && (
+            {module.description ? (
               <p className="mt-1 text-sm text-muted-foreground">{module.description}</p>
-            )}
+            ) : null}
           </div>
           {currentProgress >= 90 ? (
             <Badge variant="success">Complete</Badge>

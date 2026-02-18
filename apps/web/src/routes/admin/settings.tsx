@@ -1,8 +1,16 @@
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { useState } from 'react'
-import { requireAdmin } from '~/server/auth/middleware'
+import { useEffect, useState, type FormEvent } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
+import { queryKeys } from '~/lib/query/keys'
 import { updateMakerspaceSettings } from '~/server/api/admin'
+import { requireAdmin } from '~/server/auth/middleware'
 import {
   getMakerspaceTimezone,
   getSupportedIanaTimezones,
@@ -17,31 +25,74 @@ const getAdminSettingsData = createServerFn({ method: 'GET' }).handler(async () 
   }
 })
 
+type AdminSettingsData = Awaited<ReturnType<typeof getAdminSettingsData>>
+
+const adminSettingsDataQueryOptions = queryOptions({
+  queryKey: queryKeys.admin.settings(),
+  queryFn: () => getAdminSettingsData(),
+})
+
 export const Route = createFileRoute('/admin/settings')({
   component: AdminSettingsPage,
-  loader: async () => {
-    return await getAdminSettingsData()
-  },
 })
 
 function AdminSettingsPage() {
-  const { timezone: initialTimezone, timezoneOptions } = Route.useLoaderData()
-  const [timezone, setTimezone] = useState(initialTimezone)
-  const [saving, setSaving] = useState(false)
+  const queryClient = useQueryClient()
+  const adminSettingsQuery = useQuery(adminSettingsDataQueryOptions)
+  const [timezone, setTimezone] = useState('')
+  const [initializedTimezone, setInitializedTimezone] = useState(false)
   const [message, setMessage] = useState('')
 
-  const handleSave = async (event: React.FormEvent) => {
+  useEffect(() => {
+    if (initializedTimezone) return
+    if (!adminSettingsQuery.data?.timezone) return
+    setTimezone(adminSettingsQuery.data.timezone)
+    setInitializedTimezone(true)
+  }, [adminSettingsQuery.data?.timezone, initializedTimezone])
+
+  const updateSettingsMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to save settings',
+    },
+    mutationFn: async (variables: { timezone: string }) => {
+      const result = await updateMakerspaceSettings({ data: variables })
+      if (!result.success) {
+        throw new Error('Failed to save settings')
+      }
+      return result
+    },
+    onSuccess: async () => {
+      setMessage('Timezone updated. Checkout availability now uses this timezone.')
+      await queryClient.invalidateQueries({ queryKey: queryKeys.admin.settings() })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.admin.checkouts() })
+    },
+  })
+
+  if (adminSettingsQuery.isPending && typeof adminSettingsQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading admin settings..." />
+  }
+
+  if (adminSettingsQuery.isError && typeof adminSettingsQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load admin settings."
+        onRetry={() => {
+          void adminSettingsQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const timezoneOptions = adminSettingsQuery.data?.timezoneOptions ?? []
+
+  const handleSave = async (event: FormEvent) => {
     event.preventDefault()
-    setSaving(true)
     setMessage('')
 
     try {
-      await updateMakerspaceSettings({ data: { timezone } })
-      setMessage('Timezone updated. Checkout availability now uses this timezone.')
+      await updateSettingsMutation.mutateAsync({ timezone })
     } catch {
       setMessage('Failed to save settings.')
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -57,7 +108,7 @@ function AdminSettingsPage() {
               Final checkout availability and bookings are evaluated in this timezone.
             </p>
 
-            {message && <div className="alert alert-info mb-2">{message}</div>}
+            {message ? <div className="alert alert-info mb-2">{message}</div> : null}
 
             <form onSubmit={handleSave}>
               <div className="form-group">
@@ -66,7 +117,7 @@ function AdminSettingsPage() {
                   className="form-input"
                   value={timezone}
                   onChange={(event) => setTimezone(event.target.value)}
-                  disabled={saving}
+                  disabled={updateSettingsMutation.isPending}
                 >
                   {timezoneOptions.map((option) => (
                     <option key={option} value={option}>
@@ -76,8 +127,12 @@ function AdminSettingsPage() {
                 </select>
               </div>
 
-              <button className="btn btn-primary" type="submit" disabled={saving}>
-                {saving ? 'Saving...' : 'Save Settings'}
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={updateSettingsMutation.isPending}
+              >
+                {updateSettingsMutation.isPending ? 'Saving...' : 'Save Settings'}
               </button>
             </form>
           </div>
