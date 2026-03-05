@@ -5,6 +5,7 @@ import { requireManager, requireAdmin } from '../auth'
 import { normalizeYouTubeId } from '~/lib/youtube'
 import {
   db,
+  checkoutAppointments,
   users,
   machines,
   checkoutAvailabilityRules,
@@ -22,7 +23,9 @@ import {
   cancelCheckoutAppointmentByManager,
   createCheckoutAvailabilityBlock as createCheckoutAvailabilityBlockService,
   deactivateCheckoutAvailabilityBlock as deactivateCheckoutAvailabilityBlockService,
+  finalizeCheckoutAppointment as finalizeCheckoutAppointmentService,
   getAdminCheckoutAvailability,
+  moderateCheckoutAppointmentRequest as moderateCheckoutAppointmentRequestService,
 } from '../services/checkout-scheduling'
 import {
   getMakerspaceTimezone,
@@ -52,43 +55,30 @@ function parseTimeToMinuteOfDay(value: string): number | null {
   return hours * 60 + minutes
 }
 
-// ============ Checkout Management (Manager+) ============
+// ============ Checkout Management (Admin) ============
 
 export const getPendingCheckoutCount = createServerFn({ method: 'GET' }).handler(
   async () => {
-    await requireManager()
+    await requireAdmin()
 
-    const allUsers = await db.query.users.findMany({
-      where: and(eq(users.status, 'active'), eq(users.role, 'member')),
+    const pendingRequests = await db.query.checkoutAppointments.findMany({
+      where: eq(checkoutAppointments.status, 'pending'),
+      columns: {
+        id: true,
+      },
       with: {
-        trainingProgress: true,
-        managerCheckouts: true,
+        user: {
+          columns: {
+            id: true,
+            status: true,
+          },
+        },
       },
     })
 
-    const allMachines = await db.query.machines.findMany({
-      where: eq(machines.active, true),
-      with: {
-        requirements: true,
-      },
-    })
-
-    let count = 0
-    for (const user of allUsers) {
-      for (const machine of allMachines) {
-        const hasCheckout = user.managerCheckouts.some(
-          (c) => c.machineId === machine.id
-        )
-        if (hasCheckout) continue
-
-        const eligibility = await checkEligibility(user.id, machine.id)
-        if (eligibility.requirements.every((r) => r.completed)) {
-          count++
-        }
-      }
+    return {
+      count: pendingRequests.filter((item) => item.user.status === 'active').length,
     }
-
-    return { count }
   }
 )
 
@@ -141,73 +131,42 @@ export const updateMakerspaceSettings = createServerFn({ method: 'POST' })
 
 export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
   async () => {
-    await requireManager()
+    await requireAdmin()
 
-    // Get all users who have completed training but don't have checkouts for machines
-    const allUsers = await db.query.users.findMany({
-      where: eq(users.status, 'active'),
+    const pendingRequests = await db.query.checkoutAppointments.findMany({
+      where: eq(checkoutAppointments.status, 'pending'),
       with: {
-        trainingProgress: {
-          with: {
-            module: true,
-          },
-        },
-        managerCheckouts: {
-          with: {
-            machine: true,
-          },
-        },
+        user: true,
+        machine: true,
+        manager: true,
       },
+      orderBy: [asc(checkoutAppointments.startTime)],
     })
 
-    const allMachines = await db.query.machines.findMany({
-      where: eq(machines.active, true),
-      with: {
-        requirements: {
-          with: {
-            module: true,
+    return {
+      pendingApprovals: pendingRequests
+        .filter((item) => item.user.status === 'active')
+        .map((item) => ({
+          appointmentId: item.id,
+          startTime: item.startTime,
+          endTime: item.endTime,
+          manager: {
+            id: item.manager.id,
+            email: item.manager.email,
+            name: item.manager.name,
           },
-        },
-      },
-    })
-
-    // Find users eligible for checkout on each machine
-    const pendingApprovals = []
-
-    for (const user of allUsers) {
-      if (user.role === 'admin' || user.role === 'manager') continue
-
-      for (const machine of allMachines) {
-        // Check if already checked out
-        const hasCheckout = user.managerCheckouts.some(
-          (c) => c.machineId === machine.id
-        )
-        if (hasCheckout) continue
-
-        // Check training completion for this machine
-        const eligibility = await checkEligibility(user.id, machine.id)
-
-        // User has completed all training but no checkout yet
-        const trainingComplete = eligibility.requirements.every((r) => r.completed)
-
-        if (trainingComplete) {
-          pendingApprovals.push({
-            user: {
-              id: user.id,
-              email: user.email,
-              name: user.name,
-            },
-            machine: {
-              id: machine.id,
-              name: machine.name,
-            },
-            trainingStatus: eligibility.requirements,
-          })
-        }
-      }
+          user: {
+            id: item.user.id,
+            email: item.user.email,
+            name: item.user.name,
+          },
+          machine: {
+            id: item.machine.id,
+            name: item.machine.name,
+          },
+          trainingStatus: [],
+        })),
     }
-
-    return { pendingApprovals }
   }
 )
 
@@ -285,7 +244,7 @@ const approveCheckoutSchema = z.object({
 export const approveCheckout = createServerFn({ method: 'POST' })
   .inputValidator((data: unknown) => approveCheckoutSchema.parse(data))
   .handler(async ({ data }) => {
-    const manager = await requireManager()
+    const admin = await requireAdmin()
 
     // Verify user exists
     const user = await db.query.users.findFirst({
@@ -333,7 +292,7 @@ export const approveCheckout = createServerFn({ method: 'POST' })
       .values({
         userId: data.userId,
         machineId: data.machineId,
-        approvedBy: manager.id,
+        approvedBy: admin.id,
         notes: data.notes,
       })
       .returning()
@@ -359,7 +318,7 @@ export const revokeCheckout = createServerFn({ method: 'POST' })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    await requireManager()
+    const admin = await requireAdmin()
 
     const checkout = await db.query.managerCheckouts.findFirst({
       where: and(
@@ -384,6 +343,8 @@ export const revokeCheckout = createServerFn({ method: 'POST' })
         userId: data.userId,
         machineId: data.machineId,
         reason: 'Checkout approval revoked',
+        actedByUserId: admin.id,
+        actedByRole: 'admin',
       })
 
     // Emit real-time event
@@ -611,12 +572,56 @@ export const cancelCheckoutAppointment = createServerFn({ method: 'POST' })
       .parse(data)
   )
   .handler(async ({ data }) => {
-    const manager = await requireManager()
+    const admin = await requireAdmin()
 
     return cancelCheckoutAppointmentByManager({
       appointmentId: data.appointmentId,
-      managerId: manager.id,
+      managerId: admin.id,
+      actorRole: 'admin',
+      actorName: admin.name || admin.email,
       reason: data.reason,
+    })
+  })
+
+export const moderateCheckoutRequest = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        appointmentId: z.string().uuid(),
+        decision: z.enum(['accept', 'reject']),
+        reason: z.string().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const admin = await requireAdmin()
+
+    return moderateCheckoutAppointmentRequestService({
+      appointmentId: data.appointmentId,
+      adminId: admin.id,
+      decision: data.decision,
+      reason: data.reason,
+    })
+  })
+
+export const finalizeCheckoutMeeting = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        appointmentId: z.string().uuid(),
+        result: z.enum(['pass', 'fail']),
+        notes: z.string().optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    const admin = await requireAdmin()
+
+    return finalizeCheckoutAppointmentService({
+      appointmentId: data.appointmentId,
+      adminId: admin.id,
+      result: data.result,
+      notes: data.notes,
     })
   })
 

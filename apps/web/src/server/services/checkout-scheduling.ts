@@ -7,28 +7,34 @@ import {
   inArray,
   lt,
   lte,
+  ne,
   or,
   sql,
 } from 'drizzle-orm'
 import {
+  checkoutAppointmentEvents,
   checkoutAppointments,
   checkoutAvailabilityRules,
   db,
   managerCheckouts,
   machines,
   type NewCheckoutAppointment,
+  type NewCheckoutAppointmentEvent,
   type NewCheckoutAvailabilityRule,
   users,
 } from '~/lib/db'
 import { checkEligibility } from './eligibility'
 import {
-  notifyManagerCheckoutAppointmentBooked,
-  notifyUserCheckoutAppointmentBooked,
+  notifyAdminsCheckoutRequestSubmitted,
+  notifyUserCheckoutRequestAccepted,
+  notifyUserCheckoutRequestRejected,
+  notifyUserCheckoutResultFailed,
+  notifyUserCheckoutResultPassed,
   notifyUserCheckoutAppointmentCancelled,
 } from './notifications'
 import { getMakerspaceTimezone } from './makerspace-settings'
 
-const ACTIVE_APPOINTMENT_STATUSES = ['scheduled'] as const
+const CONFLICT_APPOINTMENT_STATUSES = ['pending', 'accepted'] as const
 
 const MANAGER_LOCK_NAMESPACE = 7001
 const MACHINE_LOCK_NAMESPACE = 7002
@@ -418,10 +424,12 @@ export async function getAvailableCheckoutSlots(input: {
   }
 
   if (input.userId) {
-    const existingUpcomingAppointment = await db.query.checkoutAppointments.findFirst({
+    const existingPendingOrAcceptedForMachine =
+      await db.query.checkoutAppointments.findFirst({
       where: and(
         eq(checkoutAppointments.userId, input.userId),
-        inArray(checkoutAppointments.status, [...ACTIVE_APPOINTMENT_STATUSES]),
+        eq(checkoutAppointments.machineId, input.machineId),
+        inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
         gt(checkoutAppointments.endTime, new Date())
       ),
       columns: {
@@ -429,7 +437,7 @@ export async function getAvailableCheckoutSlots(input: {
       },
     })
 
-    if (existingUpcomingAppointment) {
+    if (existingPendingOrAcceptedForMachine) {
       return []
     }
 
@@ -471,7 +479,7 @@ export async function getAvailableCheckoutSlots(input: {
 
   const appointments = await db.query.checkoutAppointments.findMany({
     where: and(
-      inArray(checkoutAppointments.status, [...ACTIVE_APPOINTMENT_STATUSES]),
+      inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
       lt(checkoutAppointments.startTime, input.endTime),
       gt(checkoutAppointments.endTime, input.startTime)
     ),
@@ -550,7 +558,7 @@ export async function getAdminCheckoutAvailability(input: {
   const appointments = await db.query.checkoutAppointments.findMany({
     where: and(
       eq(checkoutAppointments.managerId, input.managerId),
-      inArray(checkoutAppointments.status, [...ACTIVE_APPOINTMENT_STATUSES]),
+      inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
       lt(checkoutAppointments.startTime, input.endTime),
       gt(checkoutAppointments.endTime, input.startTime)
     ),
@@ -564,7 +572,38 @@ export async function getAdminCheckoutAvailability(input: {
   return { rules, appointments }
 }
 
-export async function bookCheckoutAppointment(input: {
+export async function getUpcomingCheckoutAppointmentsForUser(input: {
+  userId: string
+  role: 'member' | 'manager' | 'admin'
+  startTime: Date
+  endTime: Date
+}) {
+  const roleCondition =
+    input.role === 'member'
+      ? eq(checkoutAppointments.userId, input.userId)
+      : input.role === 'admin'
+        ? eq(checkoutAppointments.reviewedBy, input.userId)
+        : eq(checkoutAppointments.managerId, input.userId)
+
+  return db.query.checkoutAppointments.findMany({
+    where: and(
+      roleCondition,
+      eq(checkoutAppointments.status, 'accepted'),
+      lt(checkoutAppointments.startTime, input.endTime),
+      gt(checkoutAppointments.endTime, input.startTime)
+    ),
+    with: {
+      user: true,
+      machine: true,
+      manager: true,
+      reviewer: true,
+      resultedByUser: true,
+    },
+    orderBy: [asc(checkoutAppointments.startTime)],
+  })
+}
+
+export async function requestCheckoutAppointment(input: {
   userId: string
   machineId: string
   managerId: string
@@ -677,23 +716,24 @@ export async function bookCheckoutAppointment(input: {
     }
   }
 
-  const existingAppointment = await db.query.checkoutAppointments.findFirst({
+  const existingActiveRequestForMachine = await db.query.checkoutAppointments.findFirst({
     where: and(
       eq(checkoutAppointments.userId, input.userId),
-      inArray(checkoutAppointments.status, [...ACTIVE_APPOINTMENT_STATUSES]),
+      eq(checkoutAppointments.machineId, input.machineId),
+      inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
       gt(checkoutAppointments.endTime, new Date())
     ),
     columns: { id: true },
   })
 
-  if (existingAppointment) {
+  if (existingActiveRequestForMachine) {
     return {
       success: false,
-      error: 'You already have an upcoming checkout appointment',
+      error: 'You already have an active checkout request for this machine or tool',
     }
   }
 
-  const bookingResult = await db.transaction(async (tx) => {
+  const requestResult = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${MANAGER_LOCK_NAMESPACE}, hashtext(${input.managerId}))`)
     await tx.execute(sql`select pg_advisory_xact_lock(${MACHINE_LOCK_NAMESPACE}, hashtext(${input.machineId}))`)
     await tx.execute(sql`select pg_advisory_xact_lock(${USER_LOCK_NAMESPACE}, hashtext(${input.userId}))`)
@@ -713,25 +753,26 @@ export async function bookCheckoutAppointment(input: {
       } as const
     }
 
-    const existingUserAppointmentAfterLock = await tx.query.checkoutAppointments.findFirst({
+    const existingRequestAfterLock = await tx.query.checkoutAppointments.findFirst({
       where: and(
         eq(checkoutAppointments.userId, input.userId),
-        inArray(checkoutAppointments.status, [...ACTIVE_APPOINTMENT_STATUSES]),
+        eq(checkoutAppointments.machineId, input.machineId),
+        inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
         gt(checkoutAppointments.endTime, new Date())
       ),
       columns: { id: true },
     })
 
-    if (existingUserAppointmentAfterLock) {
+    if (existingRequestAfterLock) {
       return {
         success: false,
-        error: 'You already have an upcoming checkout appointment',
+        error: 'You already have an active checkout request for this machine or tool',
       } as const
     }
 
     const conflicts = await tx.query.checkoutAppointments.findMany({
       where: and(
-        inArray(checkoutAppointments.status, [...ACTIVE_APPOINTMENT_STATUSES]),
+        inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
         lt(checkoutAppointments.startTime, slotEndTime),
         gt(checkoutAppointments.endTime, slotStartTime),
         or(
@@ -757,79 +798,473 @@ export async function bookCheckoutAppointment(input: {
         availabilityBlockId: null,
         startTime: slotStartTime,
         endTime: slotEndTime,
-        status: 'scheduled',
+        status: 'pending',
         notes: input.notes,
       } satisfies NewCheckoutAppointment)
       .returning()
 
+    await tx.insert(checkoutAppointmentEvents).values({
+      appointmentId: appointment.id,
+      eventType: 'requested',
+      actorId: user.id,
+      actorRole: user.role,
+      fromStatus: null,
+      toStatus: 'pending',
+      metadata: {
+        machineId: machine.id,
+        managerId: input.managerId,
+      },
+    } satisfies NewCheckoutAppointmentEvent)
+
     return { success: true, data: appointment } as const
   })
 
-  if (!bookingResult.success) {
-    return bookingResult
+  if (!requestResult.success) {
+    return requestResult
   }
 
-  await notifyManagerCheckoutAppointmentBooked({
-    managerId: input.managerId,
+  await notifyAdminsCheckoutRequestSubmitted({
+    requestedByUserId: user.id,
     userName: user.name || user.email,
-    userId: user.id,
     machineName: machine.name,
     machineId: machine.id,
-    appointmentId: bookingResult.data.id,
-    startTimeIso: bookingResult.data.startTime.toISOString(),
-    endTimeIso: bookingResult.data.endTime.toISOString(),
+    appointmentId: requestResult.data.id,
+    managerId: input.managerId,
+    startTimeIso: requestResult.data.startTime.toISOString(),
+    endTimeIso: requestResult.data.endTime.toISOString(),
   })
 
-  await notifyUserCheckoutAppointmentBooked({
-    userId: user.id,
-    managerName: rule.manager.name || rule.manager.email,
-    machineName: machine.name,
-    machineId: machine.id,
-    appointmentId: bookingResult.data.id,
-    startTimeIso: bookingResult.data.startTime.toISOString(),
-    endTimeIso: bookingResult.data.endTime.toISOString(),
+  return { success: true, data: requestResult.data }
+}
+
+export async function bookCheckoutAppointment(input: {
+  userId: string
+  machineId: string
+  managerId: string
+  slotStartTime: Date
+  notes?: string
+}): Promise<CheckoutSchedulingResult<typeof checkoutAppointments.$inferSelect>> {
+  return requestCheckoutAppointment(input)
+}
+
+export async function moderateCheckoutAppointmentRequest(input: {
+  appointmentId: string
+  adminId: string
+  decision: 'accept' | 'reject'
+  reason?: string
+}): Promise<CheckoutSchedulingResult<typeof checkoutAppointments.$inferSelect>> {
+  const admin = await db.query.users.findFirst({
+    where: eq(users.id, input.adminId),
+    columns: {
+      id: true,
+      role: true,
+      status: true,
+      email: true,
+      name: true,
+    },
   })
 
-  return { success: true, data: bookingResult.data }
+  if (!admin || admin.status !== 'active' || admin.role !== 'admin') {
+    return { success: false, error: 'Only active admins can moderate checkout requests' }
+  }
+
+  const appointment = await db.query.checkoutAppointments.findFirst({
+    where: eq(checkoutAppointments.id, input.appointmentId),
+    with: {
+      user: {
+        columns: {
+          id: true,
+          email: true,
+          name: true,
+        },
+      },
+      machine: {
+        columns: {
+          id: true,
+          name: true,
+        },
+      },
+      manager: {
+        columns: {
+          id: true,
+          email: true,
+          name: true,
+        },
+      },
+    },
+  })
+
+  if (!appointment) {
+    return { success: false, error: 'Checkout appointment not found' }
+  }
+
+  if (appointment.status !== 'pending') {
+    return { success: false, error: 'Only pending requests can be moderated' }
+  }
+
+  const decisionReason = input.reason?.trim() || null
+  if (input.decision === 'reject' && !decisionReason) {
+    return { success: false, error: 'A rejection reason is required' }
+  }
+
+  if (input.decision === 'accept' && appointment.startTime <= new Date()) {
+    return { success: false, error: 'Past checkout requests cannot be accepted' }
+  }
+
+  const nextStatus = input.decision === 'accept' ? 'accepted' : 'rejected'
+  const now = new Date()
+
+  const moderationResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${MANAGER_LOCK_NAMESPACE}, hashtext(${appointment.managerId}))`)
+    await tx.execute(sql`select pg_advisory_xact_lock(${MACHINE_LOCK_NAMESPACE}, hashtext(${appointment.machineId}))`)
+    await tx.execute(sql`select pg_advisory_xact_lock(${USER_LOCK_NAMESPACE}, hashtext(${appointment.userId}))`)
+
+    const latest = await tx.query.checkoutAppointments.findFirst({
+      where: eq(checkoutAppointments.id, appointment.id),
+      columns: {
+        id: true,
+        userId: true,
+        machineId: true,
+        managerId: true,
+        startTime: true,
+        endTime: true,
+        status: true,
+      },
+    })
+
+    if (!latest) {
+      return { success: false, error: 'Checkout appointment not found' } as const
+    }
+
+    if (latest.status !== 'pending') {
+      return { success: false, error: 'Only pending requests can be moderated' } as const
+    }
+
+    if (nextStatus === 'accepted') {
+      const conflicts = await tx.query.checkoutAppointments.findMany({
+        where: and(
+          ne(checkoutAppointments.id, latest.id),
+          inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
+          lt(checkoutAppointments.startTime, latest.endTime),
+          gt(checkoutAppointments.endTime, latest.startTime),
+          or(
+            eq(checkoutAppointments.machineId, latest.machineId),
+            eq(checkoutAppointments.managerId, latest.managerId),
+            eq(checkoutAppointments.userId, latest.userId)
+          )
+        ),
+        columns: { id: true },
+      })
+
+      if (conflicts.length > 0) {
+        return {
+          success: false,
+          error: 'Cannot accept this request because the slot now conflicts with another checkout request',
+        } as const
+      }
+    }
+
+    const [updated] = await tx
+      .update(checkoutAppointments)
+      .set({
+        status: nextStatus,
+        reviewedBy: admin.id,
+        reviewedAt: now,
+        decisionReason,
+        updatedAt: now,
+      })
+      .where(eq(checkoutAppointments.id, latest.id))
+      .returning()
+
+    await tx.insert(checkoutAppointmentEvents).values({
+      appointmentId: latest.id,
+      eventType: nextStatus === 'accepted' ? 'accepted' : 'rejected',
+      actorId: admin.id,
+      actorRole: admin.role,
+      fromStatus: 'pending',
+      toStatus: nextStatus,
+      metadata: {
+        reason: decisionReason,
+      },
+    } satisfies NewCheckoutAppointmentEvent)
+
+    return { success: true, data: updated } as const
+  })
+
+  if (!moderationResult.success) {
+    return moderationResult
+  }
+
+  if (nextStatus === 'accepted') {
+    await notifyUserCheckoutRequestAccepted({
+      userId: appointment.user.id,
+      adminName: admin.name || admin.email,
+      machineName: appointment.machine.name,
+      machineId: appointment.machine.id,
+      appointmentId: appointment.id,
+      startTimeIso: appointment.startTime.toISOString(),
+      endTimeIso: appointment.endTime.toISOString(),
+    })
+  } else {
+    await notifyUserCheckoutRequestRejected({
+      userId: appointment.user.id,
+      adminName: admin.name || admin.email,
+      machineName: appointment.machine.name,
+      machineId: appointment.machine.id,
+      appointmentId: appointment.id,
+      reason: decisionReason || 'No reason provided',
+      startTimeIso: appointment.startTime.toISOString(),
+      endTimeIso: appointment.endTime.toISOString(),
+    })
+  }
+
+  return moderationResult
+}
+
+export async function finalizeCheckoutAppointment(input: {
+  appointmentId: string
+  adminId: string
+  result: 'pass' | 'fail'
+  notes?: string
+}): Promise<
+  CheckoutSchedulingResult<{
+    appointment: typeof checkoutAppointments.$inferSelect
+    checkoutGranted: boolean
+  }>
+> {
+  const admin = await db.query.users.findFirst({
+    where: eq(users.id, input.adminId),
+    columns: {
+      id: true,
+      role: true,
+      status: true,
+      email: true,
+      name: true,
+    },
+  })
+
+  if (!admin || admin.status !== 'active' || admin.role !== 'admin') {
+    return { success: false, error: 'Only active admins can finalize checkout meetings' }
+  }
+
+  const appointment = await db.query.checkoutAppointments.findFirst({
+    where: eq(checkoutAppointments.id, input.appointmentId),
+    with: {
+      user: {
+        columns: {
+          id: true,
+          email: true,
+          name: true,
+        },
+      },
+      machine: {
+        columns: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  })
+
+  if (!appointment) {
+    return { success: false, error: 'Checkout appointment not found' }
+  }
+
+  if (appointment.status !== 'accepted') {
+    return { success: false, error: 'Only accepted checkout meetings can be finalized' }
+  }
+
+  const now = new Date()
+  const trimmedNotes = input.notes?.trim() || null
+
+  const finalizeResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${MACHINE_LOCK_NAMESPACE}, hashtext(${appointment.machineId}))`)
+    await tx.execute(sql`select pg_advisory_xact_lock(${USER_LOCK_NAMESPACE}, hashtext(${appointment.userId}))`)
+
+    const latest = await tx.query.checkoutAppointments.findFirst({
+      where: eq(checkoutAppointments.id, appointment.id),
+      columns: {
+        id: true,
+        userId: true,
+        machineId: true,
+        status: true,
+      },
+    })
+
+    if (!latest) {
+      return { success: false, error: 'Checkout appointment not found' } as const
+    }
+
+    if (latest.status !== 'accepted') {
+      return {
+        success: false,
+        error: 'Only accepted checkout meetings can be finalized',
+      } as const
+    }
+
+    let checkoutGranted = false
+
+    if (input.result === 'pass') {
+      const existingCheckout = await tx.query.managerCheckouts.findFirst({
+        where: and(
+          eq(managerCheckouts.userId, latest.userId),
+          eq(managerCheckouts.machineId, latest.machineId)
+        ),
+        columns: { id: true },
+      })
+
+      if (!existingCheckout) {
+        await tx.insert(managerCheckouts).values({
+          userId: latest.userId,
+          machineId: latest.machineId,
+          approvedBy: admin.id,
+          notes: trimmedNotes ?? `Checkout passed via appointment ${latest.id}`,
+        })
+        checkoutGranted = true
+      }
+    }
+
+    const [updated] = await tx
+      .update(checkoutAppointments)
+      .set({
+        status: 'completed',
+        result: input.result,
+        resultNotes: trimmedNotes,
+        resultedBy: admin.id,
+        resultedAt: now,
+        completedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(checkoutAppointments.id, latest.id))
+      .returning()
+
+    await tx.insert(checkoutAppointmentEvents).values({
+      appointmentId: latest.id,
+      eventType: input.result === 'pass' ? 'passed' : 'failed',
+      actorId: admin.id,
+      actorRole: admin.role,
+      fromStatus: 'accepted',
+      toStatus: 'completed',
+      metadata: {
+        result: input.result,
+        notes: trimmedNotes,
+        checkoutGranted,
+      },
+    } satisfies NewCheckoutAppointmentEvent)
+
+    return {
+      success: true,
+      data: {
+        appointment: updated,
+        checkoutGranted,
+      },
+    } as const
+  })
+
+  if (!finalizeResult.success) {
+    return finalizeResult
+  }
+
+  if (input.result === 'pass') {
+    await notifyUserCheckoutResultPassed({
+      userId: appointment.user.id,
+      adminName: admin.name || admin.email,
+      machineName: appointment.machine.name,
+      machineId: appointment.machine.id,
+      appointmentId: appointment.id,
+      startTimeIso: appointment.startTime.toISOString(),
+      endTimeIso: appointment.endTime.toISOString(),
+    })
+  } else {
+    await notifyUserCheckoutResultFailed({
+      userId: appointment.user.id,
+      adminName: admin.name || admin.email,
+      machineName: appointment.machine.name,
+      machineId: appointment.machine.id,
+      appointmentId: appointment.id,
+      startTimeIso: appointment.startTime.toISOString(),
+      endTimeIso: appointment.endTime.toISOString(),
+      notes: trimmedNotes || undefined,
+    })
+  }
+
+  return finalizeResult
 }
 
 export async function cancelFutureCheckoutAppointmentsForUserMachine(input: {
   userId: string
   machineId: string
   reason?: string
+  actedByUserId?: string
+  actedByRole?: 'manager' | 'admin'
 }) {
   const now = new Date()
 
-  return db
-    .update(checkoutAppointments)
-    .set({
-      status: 'cancelled',
-      cancellationReason: input.reason,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(checkoutAppointments.userId, input.userId),
-        eq(checkoutAppointments.machineId, input.machineId),
-        eq(checkoutAppointments.status, 'scheduled'),
-        gt(checkoutAppointments.startTime, now)
+  const targets = await db.query.checkoutAppointments.findMany({
+    where: and(
+      eq(checkoutAppointments.userId, input.userId),
+      eq(checkoutAppointments.machineId, input.machineId),
+      inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
+      gt(checkoutAppointments.startTime, now)
+    ),
+    columns: {
+      id: true,
+      status: true,
+    },
+  })
+
+  if (targets.length === 0) {
+    return []
+  }
+
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(checkoutAppointments)
+      .set({
+        status: 'cancelled',
+        cancellationReason: input.reason,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(checkoutAppointments.userId, input.userId),
+          eq(checkoutAppointments.machineId, input.machineId),
+          inArray(checkoutAppointments.status, [...CONFLICT_APPOINTMENT_STATUSES]),
+          gt(checkoutAppointments.startTime, now)
+        )
       )
-    )
-    .returning({
-      id: checkoutAppointments.id,
-    })
+      .returning({
+        id: checkoutAppointments.id,
+      })
+
+    const eventRows: NewCheckoutAppointmentEvent[] = targets.map((target) => ({
+      appointmentId: target.id,
+      eventType: 'cancelled',
+      actorId: input.actedByUserId ?? null,
+      actorRole: input.actedByRole ?? null,
+      fromStatus: target.status,
+      toStatus: 'cancelled',
+      metadata: {
+        reason: input.reason || null,
+        source: 'cancelFutureCheckoutAppointmentsForUserMachine',
+      },
+    }))
+
+    await tx.insert(checkoutAppointmentEvents).values(eventRows)
+
+    return updated
+  })
 }
 
 export async function cancelCheckoutAppointmentByManager(input: {
   appointmentId: string
   managerId: string
+  actorRole?: 'member' | 'manager' | 'admin'
+  actorName?: string
   reason?: string
 }): Promise<CheckoutSchedulingResult<typeof checkoutAppointments.$inferSelect>> {
   const appointment = await db.query.checkoutAppointments.findFirst({
-    where: and(
-      eq(checkoutAppointments.id, input.appointmentId),
-      eq(checkoutAppointments.managerId, input.managerId)
-    ),
+    where: eq(checkoutAppointments.id, input.appointmentId),
     with: {
       user: {
         columns: {
@@ -858,34 +1293,61 @@ export async function cancelCheckoutAppointmentByManager(input: {
     return { success: false, error: 'Checkout appointment not found' }
   }
 
-  if (appointment.status !== 'scheduled') {
-    return { success: false, error: 'Only scheduled appointments can be cancelled' }
+  const actorRole = input.actorRole ?? 'manager'
+  if (actorRole === 'manager' && appointment.managerId !== input.managerId) {
+    return { success: false, error: 'Only the assigned manager can cancel this appointment' }
+  }
+  if (actorRole === 'member' && appointment.user.id !== input.managerId) {
+    return { success: false, error: 'Only the requesting member can cancel this appointment' }
+  }
+
+  if (appointment.status !== 'pending' && appointment.status !== 'accepted') {
+    return { success: false, error: 'Only pending or accepted appointments can be cancelled' }
   }
 
   if (appointment.startTime <= new Date()) {
     return { success: false, error: 'Only future appointments can be cancelled' }
   }
 
-  const [updated] = await db
-    .update(checkoutAppointments)
-    .set({
-      status: 'cancelled',
-      cancellationReason: input.reason,
-      updatedAt: new Date(),
-    })
-    .where(eq(checkoutAppointments.id, input.appointmentId))
-    .returning()
+  const [updated] = await db.transaction(async (tx) => {
+    const [next] = await tx
+      .update(checkoutAppointments)
+      .set({
+        status: 'cancelled',
+        cancellationReason: input.reason,
+        updatedAt: new Date(),
+      })
+      .where(eq(checkoutAppointments.id, input.appointmentId))
+      .returning()
 
-  await notifyUserCheckoutAppointmentCancelled({
-    userId: appointment.user.id,
-    managerName: appointment.manager.name || appointment.manager.email,
-    machineName: appointment.machine.name,
-    machineId: appointment.machine.id,
-    appointmentId: appointment.id,
-    startTimeIso: appointment.startTime.toISOString(),
-    endTimeIso: appointment.endTime.toISOString(),
-    reason: input.reason,
+    await tx.insert(checkoutAppointmentEvents).values({
+      appointmentId: appointment.id,
+      eventType: 'cancelled',
+      actorId: input.managerId,
+      actorRole,
+      fromStatus: appointment.status,
+      toStatus: 'cancelled',
+      metadata: {
+        reason: input.reason || null,
+      },
+    } satisfies NewCheckoutAppointmentEvent)
+
+    return [next]
   })
+
+  if (actorRole !== 'member') {
+    await notifyUserCheckoutAppointmentCancelled({
+      userId: appointment.user.id,
+      managerName:
+        input.actorName || appointment.manager.name || appointment.manager.email,
+      machineName: appointment.machine.name,
+      machineId: appointment.machine.id,
+      appointmentId: appointment.id,
+      startTimeIso: appointment.startTime.toISOString(),
+      endTimeIso: appointment.endTime.toISOString(),
+      reason: input.reason,
+    })
+  }
 
   return { success: true, data: updated }
 }

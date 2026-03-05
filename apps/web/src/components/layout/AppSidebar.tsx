@@ -76,12 +76,6 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
   if (isManagerOrAdmin) {
     managementLinks.push(
       {
-        title: 'Checkout Queue',
-        to: '/admin/checkouts',
-        icon: ClipboardCheck,
-        badge: badges.pendingCheckoutCount,
-      },
-      {
         title: 'Machines Admin',
         to: '/admin/machines',
         icon: Wrench,
@@ -96,6 +90,12 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
 
   if (isAdmin) {
     managementLinks.push(
+      {
+        title: 'Checkout Queue',
+        to: '/admin/checkouts',
+        icon: ClipboardCheck,
+        badge: badges.pendingCheckoutCount,
+      },
       {
         title: 'Booking Requests',
         to: '/admin/booking-requests',

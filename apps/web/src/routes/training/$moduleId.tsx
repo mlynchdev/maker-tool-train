@@ -149,7 +149,6 @@ function TrainingModulePage() {
       const normalizedWatchedSeconds = watchedRanges.length > 0
         ? Math.floor(getWatchedRangeSeconds(watchedRanges))
         : watchedSeconds
-
       if (savingRef.current) {
         const pending = pendingRef.current
         pendingRef.current = pending

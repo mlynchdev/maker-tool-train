@@ -10,7 +10,7 @@ import { approveCheckout, revokeCheckout } from '~/server/api/admin'
 const getUserCheckoutData = createServerFn({ method: 'GET' })
   .inputValidator((data: { userId: string }) => data)
   .handler(async ({ data }) => {
-    await requireManager()
+    const currentUser = await requireManager()
 
     const member = await db.query.users.findFirst({
       where: eq(users.id, data.userId),
@@ -55,7 +55,7 @@ const getUserCheckoutData = createServerFn({ method: 'GET' })
       })
     )
 
-    return { member, machineStatuses }
+    return { currentUser, member, machineStatuses }
   })
 
 export const Route = createFileRoute('/admin/checkouts/$userId')({
@@ -66,9 +66,10 @@ export const Route = createFileRoute('/admin/checkouts/$userId')({
 })
 
 function UserCheckoutPage() {
-  const { member, machineStatuses: initialStatuses } = Route.useLoaderData()
+  const { currentUser, member, machineStatuses: initialStatuses } = Route.useLoaderData()
   const [machineStatuses, setMachineStatuses] = useState(initialStatuses)
   const [processing, setProcessing] = useState<string | null>(null)
+  const canManageCheckouts = currentUser.role === 'admin'
 
   const handleApprove = async (machineId: string) => {
     setProcessing(machineId)
@@ -238,7 +239,9 @@ function UserCheckoutPage() {
                           )}
                         </td>
                         <td data-label="Actions">
-                          {status.hasCheckout ? (
+                          {!canManageCheckouts ? (
+                            <span className="text-muted text-small">Admin only</span>
+                          ) : status.hasCheckout ? (
                             <button
                               className="btn btn-danger"
                               onClick={() => handleRevoke(status.machine.id)}

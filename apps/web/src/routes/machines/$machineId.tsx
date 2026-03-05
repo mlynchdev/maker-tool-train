@@ -137,7 +137,7 @@ function MachineDetailPage() {
 
       if (result.success) {
         setCheckoutMessage(
-          'Checkout appointment booked. A manager/admin will meet you during that slot.'
+          'Checkout request submitted. Status: pending admin review.'
         )
         setCheckoutSlots((prev) =>
           prev.filter(
@@ -149,10 +149,10 @@ function MachineDetailPage() {
           )
         )
       } else {
-        setCheckoutMessage(result.error || 'Unable to book checkout appointment')
+        setCheckoutMessage(result.error || 'Unable to submit checkout request')
       }
     } catch {
-      setCheckoutMessage('Unable to book checkout appointment')
+      setCheckoutMessage('Unable to submit checkout request')
     } finally {
       setBookingSlotKey(null)
     }
@@ -213,12 +213,12 @@ function MachineDetailPage() {
               </div>
 
               <div>
-                <p className="mb-2 text-sm font-medium">Manager checkout</p>
+                <p className="mb-2 text-sm font-medium">In-person checkout</p>
                 <div className="rounded-lg border p-3">
                   {eligibility.hasCheckout ? (
-                    <Badge variant="success">Approved by manager</Badge>
+                    <Badge variant="success">Checkout completed</Badge>
                   ) : (
-                    <Badge variant="warning">Pending manager approval</Badge>
+                    <Badge variant="warning">Required before reservations</Badge>
                   )}
                 </div>
               </div>
@@ -262,7 +262,7 @@ function MachineDetailPage() {
                   {trainingComplete && !eligibility.hasCheckout && (
                     <div className="space-y-3">
                       <p className="text-sm text-muted-foreground">
-                        Training is complete. Book your final in-person checkout.
+                        Training is complete. Request your in-person checkout appointment.
                       </p>
                       <p className="text-sm text-muted-foreground">
                         Times shown in <strong>{makerspaceTimezone}</strong>. Duration is{' '}
@@ -302,7 +302,7 @@ function MachineDetailPage() {
                                   }
                                   disabled={bookingSlotKey === slotKey}
                                 >
-                                  {bookingSlotKey === slotKey ? 'Booking...' : 'Book checkout'}
+                                  {bookingSlotKey === slotKey ? 'Submitting...' : 'Request checkout'}
                                 </Button>
                               </div>
                             )
