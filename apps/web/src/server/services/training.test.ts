@@ -1,15 +1,49 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => {
+  const updateWhere = vi.fn().mockResolvedValue(undefined)
+  const updateSet = vi.fn(() => ({ where: updateWhere }))
+  const insertValues = vi.fn().mockResolvedValue(undefined)
+
+  return {
+    db: {
+      query: {
+        trainingModules: { findFirst: vi.fn() },
+        trainingProgress: { findFirst: vi.fn() },
+      },
+      update: vi.fn(() => ({ set: updateSet })),
+      insert: vi.fn(() => ({ values: insertValues })),
+    },
+    trainingProgress: {
+      id: 'training_progress.id',
+      userId: 'training_progress.user_id',
+      moduleId: 'training_progress.module_id',
+    },
+    trainingModules: {
+      id: 'training_modules.id',
+    },
+    updateSet,
+    updateWhere,
+    insertValues,
+  }
+})
+
+vi.mock('drizzle-orm', () => ({
+  and: vi.fn((...args: unknown[]) => ({ kind: 'and', args })),
+  eq: vi.fn((...args: unknown[]) => ({ kind: 'eq', args })),
+}))
 
 vi.mock('~/lib/db', () => ({
-  db: {},
-  trainingProgress: {},
-  trainingModules: {},
+  db: mocks.db,
+  trainingProgress: mocks.trainingProgress,
+  trainingModules: mocks.trainingModules,
 }))
 
 import { getWatchedRangeSeconds } from '~/lib/watch-ranges'
 import {
   mergeProgressRanges,
   shouldSnapEndedProgressToFullDuration,
+  updateTrainingProgress,
   validateProgressUpdate,
   type ProgressUpdate,
 } from './training'
@@ -24,6 +58,12 @@ function makeUpdate(overrides: Partial<ProgressUpdate> = {}): ProgressUpdate {
     ...overrides,
   }
 }
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mocks.db.query.trainingModules.findFirst.mockResolvedValue(null)
+  mocks.db.query.trainingProgress.findFirst.mockResolvedValue(null)
+})
 
 describe('validateProgressUpdate', () => {
   it('rejects when watched seconds exceed video duration', () => {
@@ -223,5 +263,47 @@ describe('shouldSnapEndedProgressToFullDuration', () => {
     )
 
     expect(shouldSnap).toBe(false)
+  })
+})
+
+describe('updateTrainingProgress', () => {
+  it('validates against pre-snap progress and still persists snapped completion', async () => {
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: '00000000-0000-0000-0000-000000000001',
+      active: true,
+      durationSeconds: 100,
+    })
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      id: 'progress-1',
+      watchedSeconds: 94,
+      watchedRanges: [{ start: 0, end: 94 }],
+      completedAt: null,
+    })
+
+    const result = await updateTrainingProgress(
+      'user-1',
+      makeUpdate({
+        watchedRanges: [{ start: 99, end: 100 }],
+        currentPosition: 99,
+        sessionDuration: 1,
+        ended: true,
+      })
+    )
+
+    expect(result).toEqual({
+      success: true,
+      watchedSeconds: 100,
+      percentComplete: 100,
+    })
+    expect(mocks.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        watchedSeconds: 100,
+        watchedRanges: [{ start: 0, end: 100 }],
+        lastPosition: 100,
+        completedAt: expect.any(Date),
+        updatedAt: expect.any(Date),
+      })
+    )
+    expect(mocks.updateWhere).toHaveBeenCalledTimes(1)
   })
 })
