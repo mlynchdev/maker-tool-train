@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useRef, useState } from 'react'
-import type { WatchedRange } from '~/lib/watch-ranges'
+import { getWatchedRangeSeconds, type WatchedRange } from '~/lib/watch-ranges'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
 import { normalizeYouTubeId } from '~/lib/youtube'
@@ -80,14 +80,20 @@ function TrainingModulePage() {
       setSaving(true)
 
       const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
-      const localPercent = Math.min(Math.floor((watchedSeconds / displayDuration) * 100), 100)
+      const normalizedWatchedSeconds = watchedRanges.length > 0
+        ? Math.floor(getWatchedRangeSeconds(watchedRanges))
+        : watchedSeconds
+      const localPercent = Math.min(
+        Math.floor((normalizedWatchedSeconds / displayDuration) * 100),
+        100
+      )
       setCurrentProgress(localPercent)
 
       try {
         const result = await updateProgress({
           data: {
             moduleId: module.id,
-            watchedSeconds,
+            watchedSeconds: normalizedWatchedSeconds,
             watchedRanges,
             currentPosition,
             sessionDuration,
@@ -140,11 +146,15 @@ function TrainingModulePage() {
       videoDuration: number
       ended: boolean
     }) => {
+      const normalizedWatchedSeconds = watchedRanges.length > 0
+        ? Math.floor(getWatchedRangeSeconds(watchedRanges))
+        : watchedSeconds
+
       if (savingRef.current) {
         const pending = pendingRef.current
         pendingRef.current = pending
           ? {
-              watchedSeconds: Math.max(pending.watchedSeconds, watchedSeconds),
+              watchedSeconds: normalizedWatchedSeconds,
               watchedRanges,
               currentPosition,
               sessionDuration: Math.min(300, pending.sessionDuration + sessionDuration),
@@ -152,7 +162,7 @@ function TrainingModulePage() {
               ended: pending.ended || ended,
             }
           : {
-              watchedSeconds,
+              watchedSeconds: normalizedWatchedSeconds,
               watchedRanges,
               currentPosition,
               sessionDuration,

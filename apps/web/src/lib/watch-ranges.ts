@@ -37,7 +37,7 @@ export function normalizeWatchedRanges(
     return []
   }
 
-  const merged: WatchedRange[] = [clamped[0]]
+  const merged: WatchedRange[] = [{ ...clamped[0] }]
 
   for (let i = 1; i < clamped.length; i++) {
     const current = clamped[i]

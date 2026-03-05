@@ -8,8 +8,8 @@ const mocks = vi.hoisted(() => {
   return {
     db: {
       query: {
-        trainingModules: { findFirst: vi.fn() },
-        trainingProgress: { findFirst: vi.fn() },
+        trainingModules: { findFirst: vi.fn(), findMany: vi.fn() },
+        trainingProgress: { findFirst: vi.fn(), findMany: vi.fn() },
       },
       update: vi.fn(() => ({ set: updateSet })),
       insert: vi.fn(() => ({ values: insertValues })),
@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     },
     trainingModules: {
       id: 'training_modules.id',
+      active: 'training_modules.active',
     },
     updateSet,
     updateWhere,
@@ -41,6 +42,8 @@ vi.mock('~/lib/db', () => ({
 
 import { getWatchedRangeSeconds } from '~/lib/watch-ranges'
 import {
+  getAllModulesWithProgress,
+  getModuleProgress,
   mergeProgressRanges,
   shouldSnapEndedProgressToFullDuration,
   updateTrainingProgress,
@@ -62,7 +65,9 @@ function makeUpdate(overrides: Partial<ProgressUpdate> = {}): ProgressUpdate {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.db.query.trainingModules.findFirst.mockResolvedValue(null)
+  mocks.db.query.trainingModules.findMany.mockResolvedValue([])
   mocks.db.query.trainingProgress.findFirst.mockResolvedValue(null)
+  mocks.db.query.trainingProgress.findMany.mockResolvedValue([])
 })
 
 describe('validateProgressUpdate', () => {
@@ -305,5 +310,89 @@ describe('updateTrainingProgress', () => {
       })
     )
     expect(mocks.updateWhere).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('getModuleProgress', () => {
+  it('derives watched seconds and percent complete from normalized ranges', async () => {
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      watchedSeconds: 20,
+      watchedRanges: [{ start: 0, end: 60 }],
+      lastPosition: 42,
+      completedAt: null,
+    })
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: 'module-1',
+      title: 'Safety Fundamentals',
+      durationSeconds: 100,
+    })
+
+    const result = await getModuleProgress('user-1', 'module-1')
+
+    expect(result).toEqual({
+      moduleId: 'module-1',
+      moduleTitle: 'Safety Fundamentals',
+      durationSeconds: 100,
+      watchedSeconds: 60,
+      watchedRanges: [{ start: 0, end: 60 }],
+      lastPosition: 42,
+      completedAt: null,
+      percentComplete: 60,
+    })
+  })
+})
+
+describe('getAllModulesWithProgress', () => {
+  it('returns watched seconds and percent complete from range-derived progress', async () => {
+    mocks.db.query.trainingModules.findMany.mockResolvedValue([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+      },
+      {
+        id: 'module-2',
+        title: 'Laser Safety',
+        durationSeconds: 80,
+        active: true,
+      },
+    ])
+    mocks.db.query.trainingProgress.findMany.mockResolvedValue([
+      {
+        moduleId: 'module-1',
+        watchedSeconds: 10,
+        watchedRanges: [{ start: 0, end: 95 }],
+        lastPosition: 95,
+        completedAt: null,
+      },
+    ])
+
+    const result = await getAllModulesWithProgress('user-1')
+
+    expect(result).toEqual([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+        watchedSeconds: 95,
+        watchedRanges: [{ start: 0, end: 95 }],
+        lastPosition: 95,
+        completedAt: null,
+        percentComplete: 95,
+      },
+      {
+        id: 'module-2',
+        title: 'Laser Safety',
+        durationSeconds: 80,
+        active: true,
+        watchedSeconds: 0,
+        watchedRanges: [],
+        lastPosition: 0,
+        completedAt: undefined,
+        percentComplete: 0,
+      },
+    ])
   })
 })

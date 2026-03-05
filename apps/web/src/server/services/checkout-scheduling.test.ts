@@ -426,6 +426,7 @@ describe('checkout-scheduling service', () => {
 
   it('matches manager availability using makerspace timezone instead of UTC day/hour', async () => {
     const slotStartTime = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    // 01:30 UTC always lands on the previous day in America/Los_Angeles.
     slotStartTime.setUTCHours(1, 30, 0, 0)
     const appointmentEnd = new Date(slotStartTime.getTime() + 30 * 60 * 1000)
     const expectedDayOfWeek = getDayOfWeekInTimeZone(slotStartTime, 'America/Los_Angeles')
@@ -498,7 +499,6 @@ describe('checkout-scheduling service', () => {
       slotStartTime,
     })
 
-    expect(expectedDayOfWeek).not.toBe(slotStartTime.getUTCDay())
     expect(result).toEqual({
       success: true,
       data: {
