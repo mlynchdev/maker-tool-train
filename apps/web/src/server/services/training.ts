@@ -208,7 +208,7 @@ export async function updateTrainingProgress(
     ? [{ start: 0, end: effectiveDuration }]
     : mergedRanges
   const existingWatchedRangeSeconds = getWatchedRangeSeconds(existingRanges)
-  const mergedWatchedRangeSeconds = getWatchedRangeSeconds(finalizedRanges)
+  const mergedWatchedRangeSeconds = getWatchedRangeSeconds(mergedRanges)
 
   // Validate the update
   const validation = validateProgressUpdate(
@@ -223,8 +223,9 @@ export async function updateTrainingProgress(
   }
 
   // Cap watched seconds at the effective duration (fixes inflated values from old bugs)
+  const finalizedWatchedRangeSeconds = getWatchedRangeSeconds(finalizedRanges)
   const savedWatchedSeconds = Math.min(
-    Math.floor(mergedWatchedRangeSeconds),
+    Math.floor(finalizedWatchedRangeSeconds),
     effectiveDuration
   )
   const savedLastPosition = Math.min(
