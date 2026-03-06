@@ -136,7 +136,10 @@ function UserCheckoutPage() {
       }
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userCheckouts(userId) })
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.userCheckouts(userId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.users() }),
+      ])
     },
   })
 
@@ -193,7 +196,10 @@ function UserCheckoutPage() {
       }
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userCheckouts(userId) })
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.userCheckouts(userId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.users() }),
+      ])
     },
   })
 
