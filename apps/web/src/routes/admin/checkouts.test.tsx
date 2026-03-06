@@ -4,7 +4,12 @@ import { createElement, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { queryKeys } from '~/lib/query/keys'
+import {
+  cancelCheckoutAppointment,
+  finalizeCheckoutMeeting,
+} from '~/server/api/admin'
 
 let checkoutsData: {
   user: { id: string; email: string; name: string | null; role: string }
@@ -61,6 +66,8 @@ vi.mock('~/server/api/admin', () => ({
 
 describe('admin checkouts route', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
+
     checkoutsData = {
       user: {
         id: 'admin-1',
@@ -103,6 +110,10 @@ describe('admin checkouts route', () => {
       ],
       checkoutAvailabilityRules: [],
     }
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('restores queue counts, filters, search, and booking shortcut link', async () => {
@@ -163,5 +174,107 @@ describe('admin checkouts route', () => {
     expect(
       screen.getByRole('link', { name: 'Open Booking Requests' })
     ).toHaveAttribute('href', '/admin/booking-requests')
+  })
+
+  it('removes finalized appointments from the pending checkouts cache optimistically', async () => {
+    vi.stubGlobal('prompt', vi.fn(() => ''))
+    vi.mocked(finalizeCheckoutMeeting).mockResolvedValue({
+      success: true,
+      data: {
+        appointment: {} as never,
+        checkoutGranted: false,
+      },
+    } as Awaited<ReturnType<typeof finalizeCheckoutMeeting>>)
+
+    const { Route } = await import('./checkouts')
+    const CheckoutsPage = Route.options.component as () => ReactNode
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    })
+
+    queryClient.setQueryData(queryKeys.admin.pendingCheckouts(), {
+      pendingApprovals: [
+        { appointmentId: 'accepted-1' },
+        { appointmentId: 'pending-1' },
+      ],
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CheckoutsPage />
+      </QueryClientProvider>
+    )
+
+    await screen.findByRole('heading', { name: 'Checkout Request Queue' })
+    await user.click(screen.getByRole('button', { name: 'Accepted' }))
+    await user.click(screen.getByRole('button', { name: 'Pass' }))
+
+    await waitFor(() => {
+      expect(finalizeCheckoutMeeting).toHaveBeenCalledWith({
+        data: {
+          appointmentId: 'accepted-1',
+          result: 'pass',
+          notes: undefined,
+        },
+      })
+    })
+
+    expect(queryClient.getQueryData(queryKeys.admin.pendingCheckouts())).toEqual({
+      pendingApprovals: [{ appointmentId: 'pending-1' }],
+    })
+  })
+
+  it('removes cancelled appointments from the pending checkouts cache optimistically', async () => {
+    vi.stubGlobal('prompt', vi.fn(() => 'Manager unavailable'))
+    vi.mocked(cancelCheckoutAppointment).mockResolvedValue({
+      success: true,
+      data: {} as never,
+    } as Awaited<ReturnType<typeof cancelCheckoutAppointment>>)
+
+    const { Route } = await import('./checkouts')
+    const CheckoutsPage = Route.options.component as () => ReactNode
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    })
+
+    queryClient.setQueryData(queryKeys.admin.pendingCheckouts(), {
+      pendingApprovals: [
+        { appointmentId: 'accepted-1' },
+        { appointmentId: 'pending-1' },
+      ],
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CheckoutsPage />
+      </QueryClientProvider>
+    )
+
+    await screen.findByRole('heading', { name: 'Checkout Request Queue' })
+    await user.click(screen.getByRole('button', { name: 'Accepted' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(cancelCheckoutAppointment).toHaveBeenCalledWith({
+        data: {
+          appointmentId: 'accepted-1',
+          reason: 'Manager unavailable',
+        },
+      })
+    })
+
+    expect(queryClient.getQueryData(queryKeys.admin.pendingCheckouts())).toEqual({
+      pendingApprovals: [{ appointmentId: 'pending-1' }],
+    })
   })
 })

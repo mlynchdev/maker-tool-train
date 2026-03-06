@@ -270,23 +270,42 @@ function CheckoutsPage() {
       return result
     },
     onMutate: async (variables) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.admin.checkouts() })
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: queryKeys.admin.checkouts() }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingCheckouts(),
+        }),
+      ])
       const previousCheckouts = queryClient.getQueryData<CheckoutsData>(
         queryKeys.admin.checkouts()
       )
+      const previousPendingCheckouts =
+        queryClient.getQueryData<PendingCheckoutsData>(
+          queryKeys.admin.pendingCheckouts()
+        )
 
       queryClient.setQueryData<CheckoutsData>(
         queryKeys.admin.checkouts(),
         (current) => applyCheckoutQueueRemovalOptimistic(current, variables.appointmentId)
       )
+      queryClient.setQueryData<PendingCheckoutsData>(
+        queryKeys.admin.pendingCheckouts(),
+        (current) => applyPendingCheckoutRemoval(current, variables.appointmentId)
+      )
 
-      return { previousCheckouts }
+      return { previousCheckouts, previousPendingCheckouts }
     },
     onError: (_error, _variables, context) => {
       if (context?.previousCheckouts) {
         queryClient.setQueryData(
           queryKeys.admin.checkouts(),
           context.previousCheckouts
+        )
+      }
+      if (context?.previousPendingCheckouts) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingCheckouts(),
+          context.previousPendingCheckouts
         )
       }
     },
@@ -311,23 +330,42 @@ function CheckoutsPage() {
       return result
     },
     onMutate: async (variables) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.admin.checkouts() })
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: queryKeys.admin.checkouts() }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingCheckouts(),
+        }),
+      ])
       const previousCheckouts = queryClient.getQueryData<CheckoutsData>(
         queryKeys.admin.checkouts()
       )
+      const previousPendingCheckouts =
+        queryClient.getQueryData<PendingCheckoutsData>(
+          queryKeys.admin.pendingCheckouts()
+        )
 
       queryClient.setQueryData<CheckoutsData>(
         queryKeys.admin.checkouts(),
         (current) => applyCheckoutQueueRemovalOptimistic(current, variables.appointmentId)
       )
+      queryClient.setQueryData<PendingCheckoutsData>(
+        queryKeys.admin.pendingCheckouts(),
+        (current) => applyPendingCheckoutRemoval(current, variables.appointmentId)
+      )
 
-      return { previousCheckouts }
+      return { previousCheckouts, previousPendingCheckouts }
     },
     onError: (_error, _variables, context) => {
       if (context?.previousCheckouts) {
         queryClient.setQueryData(
           queryKeys.admin.checkouts(),
           context.previousCheckouts
+        )
+      }
+      if (context?.previousPendingCheckouts) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingCheckouts(),
+          context.previousPendingCheckouts
         )
       }
     },
