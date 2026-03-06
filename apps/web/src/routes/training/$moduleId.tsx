@@ -2,7 +2,11 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useRef, useState } from 'react'
-import { getWatchedRangeSeconds, type WatchedRange } from '~/lib/watch-ranges'
+import {
+  getWatchedRangeSeconds,
+  normalizeWatchedRanges,
+  type WatchedRange,
+} from '~/lib/watch-ranges'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
 import { normalizeYouTubeId } from '~/lib/youtube'
@@ -66,6 +70,21 @@ function TrainingModulePage() {
     videoDuration: number
     ended: boolean
   } | null>(null)
+
+  const getNormalizedWatchedSeconds = useCallback(
+    (watchedSeconds: number, watchedRanges: WatchedRange[], videoDuration: number) => {
+      const effectiveDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
+
+      if (watchedRanges.length === 0 || effectiveDuration <= 0) {
+        return watchedSeconds
+      }
+
+      return Math.floor(
+        getWatchedRangeSeconds(normalizeWatchedRanges(watchedRanges, effectiveDuration))
+      )
+    },
+    [module.durationSeconds]
+  )
 
   const saveProgress = useCallback(
     async (
@@ -143,9 +162,11 @@ function TrainingModulePage() {
       videoDuration: number
       ended: boolean
     }) => {
-      const normalizedWatchedSeconds = watchedRanges.length > 0
-        ? Math.floor(getWatchedRangeSeconds(watchedRanges))
-        : watchedSeconds
+      const normalizedWatchedSeconds = getNormalizedWatchedSeconds(
+        watchedSeconds,
+        watchedRanges,
+        videoDuration
+      )
       if (savingRef.current) {
         const pending = pendingRef.current
         pendingRef.current = pending
@@ -176,7 +197,7 @@ function TrainingModulePage() {
         ended
       )
     },
-    [saveProgress]
+    [getNormalizedWatchedSeconds, saveProgress]
   )
 
   return (
