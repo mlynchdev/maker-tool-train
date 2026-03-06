@@ -18,6 +18,7 @@ export const queryKeys = {
     all: ['reservations'] as const,
     mine: (options: ReservationListKeyOptions) =>
       ['reservations', 'mine', options] as const,
+    activeCount: () => ['reservations', 'active-count'] as const,
   },
   machines: {
     all: ['machines'] as const,

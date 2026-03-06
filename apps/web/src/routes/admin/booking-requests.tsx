@@ -20,7 +20,10 @@ import {
 } from '~/lib/query/optimistic-admin'
 import { db, reservations } from '~/lib/db'
 import { moderateReservationRequest } from '~/server/api/admin'
-import { markMyNotificationRead } from '~/server/api/notifications'
+import {
+  markAllMyNotificationsRead,
+  markMyNotificationRead,
+} from '~/server/api/notifications'
 import { requireAdmin } from '~/server/auth/middleware'
 import { getNotificationsForUser } from '~/server/services/notifications'
 
@@ -331,16 +334,8 @@ function BookingRequestsPage() {
     meta: {
       errorMessage: 'Failed to mark notifications as read',
     },
-    mutationFn: async (variables: { notificationIds: string[] }) => {
-      const results = await Promise.all(
-        variables.notificationIds.map((notificationId) =>
-          markMyNotificationRead({ data: { notificationId } })
-        )
-      )
-      const hasFailure = results.some((result) => !result.success)
-      if (hasFailure) {
-        throw new Error('Failed to mark notifications as read')
-      }
+    mutationFn: async (_variables: { notificationIds: string[] }) => {
+      await markAllMyNotificationsRead()
     },
     onMutate: async (variables) => {
       await Promise.all([
@@ -384,9 +379,14 @@ function BookingRequestsPage() {
       }
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.notifications.unreadCount(),
-      })
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.bookingRequests(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.notifications.unreadCount(),
+        }),
+      ])
     },
   })
 

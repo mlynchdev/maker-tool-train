@@ -7,6 +7,10 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys } from '~/lib/query/keys'
 import { moderateReservationRequest } from '~/server/api/admin'
+import {
+  markAllMyNotificationsRead,
+  markMyNotificationRead,
+} from '~/server/api/notifications'
 
 let bookingRequestsData: {
   user: { id: string; email: string; name: string | null; role: string }
@@ -24,7 +28,13 @@ let bookingRequestsData: {
     updatedAt: Date
   }>
   recentDecisions: unknown[]
-  bookingNotifications: Array<{ id: string; type: string }>
+  bookingNotifications: Array<{
+    id: string
+    type: string
+    title: string
+    message: string
+    createdAt: Date
+  }>
 }
 
 let bookingSearch = { view: 'pending', q: '' }
@@ -54,6 +64,7 @@ vi.mock('~/server/api/admin', () => ({
 }))
 
 vi.mock('~/server/api/notifications', () => ({
+  markAllMyNotificationsRead: vi.fn(),
   markMyNotificationRead: vi.fn(),
 }))
 
@@ -91,6 +102,13 @@ describe('admin booking requests route', () => {
       success: false,
       error: 'Moderation failed',
     })
+    vi.mocked(markAllMyNotificationsRead).mockResolvedValue({ updated: 0 })
+    vi.mocked(markMyNotificationRead).mockResolvedValue({
+      success: true,
+      notification: {
+        id: 'notification-1',
+      },
+    } as Awaited<ReturnType<typeof markMyNotificationRead>>)
   })
 
   it('restores the pending reservation count when moderation fails', async () => {
@@ -137,5 +155,62 @@ describe('admin booking requests route', () => {
     })
 
     expect(screen.getByText('CNC Router')).toBeInTheDocument()
+  })
+
+  it('uses the batch notification endpoint and revalidates booking requests', async () => {
+    bookingRequestsData.bookingNotifications = [
+      {
+        id: 'notification-1',
+        type: 'booking_requested',
+        title: 'New booking request',
+        message: 'Pat requested CNC Router',
+        createdAt: new Date('2026-03-01T17:00:00.000Z'),
+      },
+      {
+        id: 'notification-2',
+        type: 'booking_requested',
+        title: 'Another booking request',
+        message: 'Alex requested Laser Cutter',
+        createdAt: new Date('2026-03-01T18:00:00.000Z'),
+      },
+    ]
+
+    const { Route } = await import('./booking-requests')
+    const BookingRequestsPage = Route.options.component as () => ReactNode
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    })
+    const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <BookingRequestsPage />
+      </QueryClientProvider>
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Mark all read' })
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Mark all read' }))
+
+    await waitFor(() => {
+      expect(markAllMyNotificationsRead).toHaveBeenCalledTimes(1)
+    })
+    expect(markMyNotificationRead).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+        queryKey: queryKeys.admin.bookingRequests(),
+      })
+      expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+        queryKey: queryKeys.notifications.unreadCount(),
+      })
+    })
   })
 })

@@ -18,7 +18,12 @@ export {
 } from './machines'
 
 // Reservations API
-export { getReservations, getReservation, cancelReservation } from './reservations'
+export {
+  getReservations,
+  getMyActiveReservationCount,
+  getReservation,
+  cancelReservation,
+} from './reservations'
 
 // Notifications API
 export {

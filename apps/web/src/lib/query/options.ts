@@ -7,7 +7,10 @@ import {
 } from '~/server/api/admin'
 import { getMachines, getMyUpcomingCheckoutAppointments } from '~/server/api/machines'
 import { getMyUnreadNotificationCount, getNotifications } from '~/server/api/notifications'
-import { getReservations } from '~/server/api/reservations'
+import {
+  getMyActiveReservationCount,
+  getReservations,
+} from '~/server/api/reservations'
 import { getModules, getTrainingStatus } from '~/server/api/training'
 import { queryKeys } from './keys'
 
@@ -43,6 +46,13 @@ export function reservationsListQueryOptions(options: ReservationListOptions) {
   return queryOptions({
     queryKey: queryKeys.reservations.mine(options),
     queryFn: () => getReservations({ data: options }),
+  })
+}
+
+export function activeReservationCountQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.reservations.activeCount(),
+    queryFn: () => getMyActiveReservationCount(),
   })
 }
 

@@ -2,15 +2,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react'
 import { queryKeys } from '~/lib/query/keys'
 import {
+  activeReservationCountQueryOptions,
   pendingCheckoutCountQueryOptions,
   pendingReservationRequestCountQueryOptions,
-  reservationsListQueryOptions,
   unreadNotificationCountQueryOptions,
 } from '~/lib/query/options'
 import type { AuthUser } from '~/server/auth/types'
-
-const ACTIVE_RESERVATION_STATUSES = ['pending', 'approved', 'confirmed'] as const
-const SHELL_RESERVATIONS_OPTIONS = { includesPast: true } as const
 
 interface ShellBadges {
   unreadNotifications: number
@@ -39,7 +36,7 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
   const isAdmin = user.role === 'admin'
 
   const unreadCountQuery = useQuery(unreadNotificationCountQueryOptions())
-  const reservationsQuery = useQuery(reservationsListQueryOptions(SHELL_RESERVATIONS_OPTIONS))
+  const activeReservationCountQuery = useQuery(activeReservationCountQueryOptions())
   const pendingCheckoutCountQuery = useQuery({
     ...pendingCheckoutCountQueryOptions(),
     enabled: isAdmin,
@@ -50,28 +47,16 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
   })
 
   const badges = useMemo<ShellBadges>(() => {
-    const now = new Date()
-    const reservations = reservationsQuery.data?.reservations ?? []
-
-    const activeReservationCount = reservations.filter((reservation) => {
-      return (
-        ACTIVE_RESERVATION_STATUSES.includes(
-          reservation.status as (typeof ACTIVE_RESERVATION_STATUSES)[number]
-        ) &&
-        new Date(reservation.endTime) > now
-      )
-    }).length
-
     return {
       unreadNotifications: unreadCountQuery.data?.count ?? 0,
       pendingCheckoutCount: pendingCheckoutCountQuery.data?.count ?? 0,
       pendingRequestCount: pendingRequestCountQuery.data?.count ?? 0,
-      activeReservationCount,
+      activeReservationCount: activeReservationCountQuery.data?.count ?? 0,
     }
   }, [
+    activeReservationCountQuery.data?.count,
     pendingCheckoutCountQuery.data?.count,
     pendingRequestCountQuery.data?.count,
-    reservationsQuery.data?.reservations,
     unreadCountQuery.data?.count,
   ])
 
@@ -81,7 +66,7 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
         queryKey: queryKeys.notifications.unreadCount(),
       }),
       queryClient.invalidateQueries({
-        queryKey: queryKeys.reservations.mine(SHELL_RESERVATIONS_OPTIONS),
+        queryKey: queryKeys.reservations.activeCount(),
       }),
     ]
 
@@ -101,7 +86,7 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
 
   const refreshTimestamps = [
     unreadCountQuery.dataUpdatedAt,
-    reservationsQuery.dataUpdatedAt,
+    activeReservationCountQuery.dataUpdatedAt,
     pendingCheckoutCountQuery.dataUpdatedAt,
     pendingRequestCountQuery.dataUpdatedAt,
   ].filter((value) => value > 0)
@@ -111,7 +96,7 @@ export function ShellProvider({ user, children }: ShellProviderProps) {
 
   const refreshing =
     unreadCountQuery.isFetching ||
-    reservationsQuery.isFetching ||
+    activeReservationCountQuery.isFetching ||
     (isAdmin && pendingCheckoutCountQuery.isFetching) ||
     (isAdmin && pendingRequestCountQuery.isFetching)
 

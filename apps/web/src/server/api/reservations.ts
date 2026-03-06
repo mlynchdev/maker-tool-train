@@ -1,9 +1,11 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
-import { eq, and, gte, desc } from 'drizzle-orm'
+import { eq, and, gte, desc, inArray } from 'drizzle-orm'
 import { requireAuth } from '../auth'
 import { db, reservations } from '~/lib/db'
 import { cancelBookingRequestByMember } from '../services/booking-workflow'
+
+const ACTIVE_RESERVATION_STATUSES = ['pending', 'approved', 'confirmed'] as const
 
 export const getReservations = createServerFn({ method: 'GET' })
   .inputValidator((data: unknown) =>
@@ -33,6 +35,25 @@ export const getReservations = createServerFn({ method: 'GET' })
 
     return { reservations: userReservations }
   })
+
+export const getMyActiveReservationCount = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    const user = await requireAuth()
+
+    const activeReservations = await db.query.reservations.findMany({
+      where: and(
+        eq(reservations.userId, user.id),
+        inArray(reservations.status, [...ACTIVE_RESERVATION_STATUSES]),
+        gte(reservations.endTime, new Date()),
+      ),
+      columns: {
+        id: true,
+      },
+    })
+
+    return { count: activeReservations.length }
+  }
+)
 
 export const getReservation = createServerFn({ method: 'GET' })
   .inputValidator((data: unknown) =>
