@@ -121,7 +121,6 @@ function TrainingModulePage() {
     },
     [module.durationSeconds]
   )
-
   const saveProgress = useCallback(
     async (
       normalizedWatchedSeconds: number,
@@ -236,6 +235,10 @@ function TrainingModulePage() {
     },
     [getNormalizedWatchedSeconds, saveProgress]
   )
+
+  if (!module) {
+    return <QueryErrorScreen message="Training module not found." />
+  }
 
   return (
     <div className="min-h-screen">

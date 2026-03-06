@@ -229,6 +229,9 @@ function BookingRequestsPage() {
       const previousData = queryClient.getQueryData<BookingRequestsData>(
         queryKeys.admin.bookingRequests()
       )
+      const previousPendingCount = queryClient.getQueryData<{ count: number }>(
+        queryKeys.admin.pendingReservationRequestCount()
+      )
 
       queryClient.setQueryData<BookingRequestsData>(
         queryKeys.admin.bookingRequests(),
@@ -240,13 +243,19 @@ function BookingRequestsPage() {
         applyPendingReservationRequestCountDecrement
       )
 
-      return { previousData }
+      return { previousData, previousPendingCount }
     },
     onError: (_error, _variables, context) => {
       if (context?.previousData) {
         queryClient.setQueryData(
           queryKeys.admin.bookingRequests(),
           context.previousData
+        )
+      }
+      if (context?.previousPendingCount) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingReservationRequestCount(),
+          context.previousPendingCount
         )
       }
     },

@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
-import { eq, and, desc, asc } from 'drizzle-orm'
+import { eq, and, desc, asc, inArray } from 'drizzle-orm'
 import { requireManager, requireAdmin } from '../auth'
 import { normalizeYouTubeId } from '~/lib/youtube'
 import {
@@ -133,21 +133,28 @@ export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
   async () => {
     await requireAdmin()
 
+    const actionableCheckoutStatuses = ['pending', 'accepted'] as const
     const pendingRequests = await db.query.checkoutAppointments.findMany({
-      where: eq(checkoutAppointments.status, 'pending'),
+      where: inArray(checkoutAppointments.status, [...actionableCheckoutStatuses]),
       with: {
         user: true,
         machine: true,
         manager: true,
+        reviewer: true,
       },
-      orderBy: [asc(checkoutAppointments.startTime)],
+      orderBy: [asc(checkoutAppointments.createdAt)],
     })
 
+    const activeActionableRequests = pendingRequests.filter(
+      (item) => item.user.status === 'active'
+    )
+
     return {
-      pendingApprovals: pendingRequests
-        .filter((item) => item.user.status === 'active')
+      pendingApprovals: activeActionableRequests
+        .filter((item) => item.status === 'pending')
         .map((item) => ({
           appointmentId: item.id,
+          createdAt: item.createdAt,
           startTime: item.startTime,
           endTime: item.endTime,
           manager: {
@@ -166,6 +173,36 @@ export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
           },
           trainingStatus: [],
         })),
+      actionableAppointments: activeActionableRequests.map((item) => ({
+        appointmentId: item.id,
+        createdAt: item.createdAt,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        status: item.status,
+        decisionReason: item.decisionReason,
+        reviewedAt: item.reviewedAt,
+        reviewer: item.reviewer
+          ? {
+              id: item.reviewer.id,
+              email: item.reviewer.email,
+              name: item.reviewer.name,
+            }
+          : null,
+        manager: {
+          id: item.manager.id,
+          email: item.manager.email,
+          name: item.manager.name,
+        },
+        user: {
+          id: item.user.id,
+          email: item.user.email,
+          name: item.user.name,
+        },
+        machine: {
+          id: item.machine.id,
+          name: item.machine.name,
+        },
+      })),
     }
   }
 )

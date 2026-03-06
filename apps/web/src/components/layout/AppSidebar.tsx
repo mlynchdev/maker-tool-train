@@ -39,7 +39,11 @@ function normalizePath(pathname: string) {
   return pathname
 }
 
-export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarProps) {
+export function AppSidebar({
+  mobile = false,
+  onNavigate,
+  onClose,
+}: AppSidebarProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, badges } = useShellContext()
@@ -54,7 +58,7 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
       icon: LayoutDashboard,
     },
     {
-      title: 'Training',
+      title: 'My Training',
       to: '/training',
       icon: BookOpenCheck,
     },
@@ -84,7 +88,7 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
         title: 'Users',
         to: '/admin/users',
         icon: Users,
-      }
+      },
     )
   }
 
@@ -112,7 +116,7 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
         title: 'Settings',
         to: '/admin/settings',
         icon: Settings,
-      }
+      },
     )
   }
 
@@ -146,22 +150,30 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
           'group flex items-center justify-between rounded-lg border-l-2 px-2.5 py-2 text-sm transition-colors',
           active
             ? 'border-l-primary bg-primary/10 text-primary'
-            : 'border-l-transparent text-muted-foreground hover:border-l-primary/45 hover:bg-accent/35 hover:text-foreground'
+            : 'border-l-transparent text-muted-foreground hover:border-l-primary/45 hover:bg-accent/35 hover:text-foreground',
         )}
       >
-        <span className="flex items-center gap-2">
-          <link.icon className={cn('h-4 w-4 transition-colors', active ? 'text-primary' : 'text-current/85')} />
+        <span className='flex items-center gap-2'>
+          <link.icon
+            className={cn(
+              'h-4 w-4 transition-colors',
+              active ? 'text-primary' : 'text-current/85',
+            )}
+          />
           <span
             className={cn(
               'font-medium decoration-2 underline-offset-4 transition-colors',
-              active && 'font-semibold underline decoration-primary/70'
+              active && 'font-semibold underline decoration-primary/70',
             )}
           >
             {link.title}
           </span>
         </span>
         {typeof link.badge === 'number' && link.badge > 0 && (
-          <Badge variant="warning" className="min-w-5 justify-center px-1.5 py-0 text-[11px]">
+          <Badge
+            variant='warning'
+            className='min-w-5 justify-center px-1.5 py-0 text-[11px]'
+          >
             {link.badge}
           </Badge>
         )}
@@ -170,43 +182,60 @@ export function AppSidebar({ mobile = false, onNavigate, onClose }: AppSidebarPr
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="border-b px-4 py-4">
-        <div className="flex items-start justify-between gap-2">
+    <div className='flex h-full flex-col'>
+      <div className='border-b px-4 py-4'>
+        <div className='flex items-start justify-between gap-2'>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Control Deck</p>
-            <h2 className="mt-1 text-lg font-semibold tracking-tight">SBHX Training</h2>
-            <p className="mt-1 text-xs text-muted-foreground">{user.name || user.email}</p>
+            <p className='text-xs font-semibold uppercase tracking-[0.18em] text-primary'>
+              Control Deck
+            </p>
+            <h2 className='mt-1 text-lg font-semibold tracking-tight'>
+              SBHX Training
+            </h2>
+            <p className='mt-1 text-xs text-muted-foreground'>
+              {user.name || user.email}
+            </p>
           </div>
           {mobile && onClose && (
-            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close navigation">
-              <X className="h-4 w-4" />
+            <Button
+              variant='ghost'
+              size='icon'
+              onClick={onClose}
+              aria-label='Close navigation'
+            >
+              <X className='h-4 w-4' />
             </Button>
           )}
         </div>
       </div>
 
-      <div className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
+      <div className='flex-1 space-y-6 overflow-y-auto px-3 py-4'>
         <section>
-          <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          <p className='px-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground'>
             Workspace
           </p>
-          <div className="mt-2 space-y-1">{workspaceLinks.map(renderLink)}</div>
+          <div className='mt-2 space-y-1'>{workspaceLinks.map(renderLink)}</div>
         </section>
 
         {managementLinks.length > 0 && (
           <section>
-            <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            <p className='px-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground'>
               Management
             </p>
-            <div className="mt-2 space-y-1">{managementLinks.map(renderLink)}</div>
+            <div className='mt-2 space-y-1'>
+              {managementLinks.map(renderLink)}
+            </div>
           </section>
         )}
       </div>
 
-      <div className="border-t px-3 py-3">
-        <Button variant="outline" className="w-full justify-start" onClick={handleLogout}>
-          <LogOut className="mr-2 h-4 w-4" />
+      <div className='border-t px-3 py-3'>
+        <Button
+          variant='outline'
+          className='w-full justify-start'
+          onClick={handleLogout}
+        >
+          <LogOut className='mr-2 h-4 w-4' />
           Logout
         </Button>
       </div>

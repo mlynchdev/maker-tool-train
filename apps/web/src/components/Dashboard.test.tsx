@@ -22,10 +22,14 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 
 vi.mock('~/server/api/admin', () => ({
+  cancelCheckoutAppointment: vi.fn(),
+  finalizeCheckoutMeeting: vi.fn(),
   getPendingCheckoutCount: vi.fn(),
   getPendingCheckouts: vi.fn(),
   getPendingReservationRequestCount: vi.fn(),
   getPendingReservationRequests: vi.fn(),
+  moderateCheckoutRequest: vi.fn(),
+  moderateReservationRequest: vi.fn(),
 }))
 
 vi.mock('~/server/api/machines', () => ({
@@ -58,7 +62,7 @@ class MockEventSource {
 }
 
 describe('Dashboard', () => {
-  const renderDashboard = () => {
+  const renderDashboard = (role: 'manager' | 'admin' = 'manager') => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: {
@@ -74,7 +78,7 @@ describe('Dashboard', () => {
             id: 'manager-user',
             email: 'manager@example.com',
             name: null,
-            role: 'manager',
+            role,
           }}
         />
       </QueryClientProvider>
@@ -103,7 +107,10 @@ describe('Dashboard', () => {
       machines: [],
     })
     vi.mocked(getPendingCheckoutCount).mockResolvedValue({ count: 0 })
-    vi.mocked(getPendingCheckouts).mockResolvedValue({ pendingApprovals: [] })
+    vi.mocked(getPendingCheckouts).mockResolvedValue({
+      pendingApprovals: [],
+      actionableAppointments: [],
+    })
     vi.mocked(getPendingReservationRequestCount).mockResolvedValue({ count: 0 })
     vi.mocked(getPendingReservationRequests).mockResolvedValue({ requests: [] })
     vi.mocked(getMyUpcomingCheckoutAppointments).mockResolvedValue({ appointments: [] })
@@ -125,6 +132,55 @@ describe('Dashboard', () => {
     ).toBeInTheDocument()
     expect(
       await screen.findByText('No queue items match your search.')
+    ).toBeInTheDocument()
+  })
+
+  it('shows accepted checkout meetings as actionable items for admins', async () => {
+    vi.mocked(getPendingCheckouts).mockResolvedValue({
+      pendingApprovals: [],
+      actionableAppointments: [
+        {
+          appointmentId: 'checkout-1',
+          createdAt: new Date('2026-02-20T17:00:00Z'),
+          startTime: new Date('2026-02-21T22:00:00Z'),
+          endTime: new Date('2026-02-21T22:30:00Z'),
+          status: 'accepted',
+          decisionReason: null,
+          reviewedAt: new Date('2026-02-20T18:00:00Z'),
+          reviewer: {
+            id: 'admin-1',
+            email: 'admin@example.com',
+            name: 'Admin User',
+          },
+          manager: {
+            id: 'admin-1',
+            email: 'admin@example.com',
+            name: 'Admin User',
+          },
+          user: {
+            id: 'member-1',
+            email: 'foo@bar.baz',
+            name: 'asdf',
+          },
+          machine: {
+            id: 'machine-1',
+            name: '3D Printer',
+          },
+        },
+      ],
+    })
+
+    renderDashboard('admin')
+
+    expect(
+      await screen.findByRole('heading', { name: 'Action Queue' }),
+    ).toBeInTheDocument()
+    expect(await screen.findByText('Checkout Accepted')).toBeInTheDocument()
+    expect(await screen.findByText('3D Printer')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Pass' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Fail' })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Cancel' }),
     ).toBeInTheDocument()
   })
 })

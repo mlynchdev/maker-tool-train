@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc, eq, inArray } from 'drizzle-orm'
 import { useCallback, useMemo, useState, type FormEvent } from 'react'
@@ -41,6 +41,8 @@ const DAY_OPTIONS = [
 ] as const
 
 const CHECKOUT_QUEUE_STATUSES = ['pending', 'accepted', 'rejected'] as const
+type CheckoutQueueStatus = (typeof CHECKOUT_QUEUE_STATUSES)[number]
+type QueueFilter = 'all' | CheckoutQueueStatus
 
 function formatMinuteOfDay(value: number) {
   const hours24 = Math.floor(value / 60)
@@ -48,6 +50,26 @@ function formatMinuteOfDay(value: number) {
   const suffix = hours24 >= 12 ? 'PM' : 'AM'
   const hours12 = hours24 % 12 || 12
   return `${hours12}:${`${minutes}`.padStart(2, '0')} ${suffix}`
+}
+
+function matchesCheckoutSearchQuery(
+  item: CheckoutsData['checkoutQueue'][number],
+  rawQuery: string
+) {
+  const query = rawQuery.trim().toLowerCase()
+  if (!query) return true
+
+  const values = [
+    item.user.name || '',
+    item.user.email,
+    item.machine.name,
+    item.manager.name || '',
+    item.manager.email,
+    item.decisionReason || '',
+    item.status,
+  ]
+
+  return values.some((value) => value.toLowerCase().includes(query))
 }
 
 const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
@@ -96,6 +118,8 @@ function CheckoutsPage() {
   const queryClient = useQueryClient()
   const checkoutsQuery = useQuery(checkoutsDataQueryOptions)
 
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>('pending')
+  const [queueSearch, setQueueSearch] = useState('')
   const [actingId, setActingId] = useState<string | null>(null)
 
   const [selectedDayOfWeek, setSelectedDayOfWeek] = useState(6)
@@ -477,7 +501,34 @@ function CheckoutsPage() {
     }
   }
 
-  const filteredQueue = useMemo(() => checkoutQueue, [checkoutQueue])
+  const filteredQueue = useMemo(() => {
+    return checkoutQueue.filter((item) => {
+      if (queueFilter !== 'all' && item.status !== queueFilter) {
+        return false
+      }
+
+      return matchesCheckoutSearchQuery(item, queueSearch)
+    })
+  }, [checkoutQueue, queueFilter, queueSearch])
+
+  const counts = useMemo(() => {
+    let pending = 0
+    let accepted = 0
+    let rejected = 0
+
+    for (const item of checkoutQueue) {
+      if (item.status === 'pending') pending++
+      if (item.status === 'accepted') accepted++
+      if (item.status === 'rejected') rejected++
+    }
+
+    return {
+      pending,
+      accepted,
+      rejected,
+      total: checkoutQueue.length,
+    }
+  }, [checkoutQueue])
 
   if (checkoutsQuery.isPending && typeof checkoutsQuery.data === 'undefined') {
     return <QueryLoadingScreen message="Loading checkout queue..." />
@@ -498,6 +549,59 @@ function CheckoutsPage() {
     <div>
       <main className='main'>
         <div className='container'>
+          <div className='card mb-2'>
+            <div
+              className='flex flex-between flex-center'
+              style={{ flexWrap: 'wrap', gap: '0.75rem' }}
+            >
+              <div className='flex gap-1' style={{ flexWrap: 'wrap' }}>
+                <span className='badge badge-warning'>{counts.pending} pending</span>
+                <span className='badge badge-success'>{counts.accepted} accepted</span>
+                <span className='badge badge-danger'>{counts.rejected} rejected</span>
+                <span className='badge badge-info'>{counts.total} total</span>
+              </div>
+
+              <input
+                type='text'
+                className='form-input'
+                style={{ minWidth: '240px' }}
+                placeholder='Search member, machine, manager'
+                value={queueSearch}
+                onChange={(event) => setQueueSearch(event.target.value)}
+              />
+            </div>
+
+            <div className='flex gap-1 mt-2' style={{ flexWrap: 'wrap' }}>
+              <button
+                className={`btn ${queueFilter === 'pending' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('pending')}
+              >
+                Pending
+              </button>
+              <button
+                className={`btn ${queueFilter === 'accepted' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('accepted')}
+              >
+                Accepted
+              </button>
+              <button
+                className={`btn ${queueFilter === 'rejected' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('rejected')}
+              >
+                Rejected
+              </button>
+              <button
+                className={`btn ${queueFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setQueueFilter('all')}
+              >
+                All
+              </button>
+              <button className='btn btn-secondary' onClick={() => void refreshAdminData()}>
+                Refresh
+              </button>
+            </div>
+          </div>
+
           <div className='card mb-3'>
             <h3 className='card-title mb-2'>Checkout Request Queue</h3>
             {filteredQueue.length > 0 ? (
@@ -660,6 +764,24 @@ function CheckoutsPage() {
                 No checkout requests match this filter.
               </p>
             )}
+          </div>
+
+          <div className='card mb-2'>
+            <div
+              className='flex flex-between flex-center'
+              style={{ flexWrap: 'wrap', gap: '0.75rem' }}
+            >
+              <p className='text-small text-muted'>
+                Reservation request moderation has its own queue.
+              </p>
+              <Link
+                to='/admin/booking-requests'
+                search={{ view: 'pending', q: '' }}
+                className='btn btn-secondary'
+              >
+                Open Booking Requests
+              </Link>
+            </div>
           </div>
 
           <h2 className='mt-3 mb-2'>Recurring Checkout Availability</h2>

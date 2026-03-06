@@ -15,8 +15,18 @@ import {
   markAllMyNotificationsRead,
   markMyNotificationRead,
 } from '~/server/api/notifications'
+import {
+  cancelCheckoutAppointment,
+  finalizeCheckoutMeeting,
+  moderateCheckoutRequest,
+  moderateReservationRequest,
+} from '~/server/api/admin'
 import type { getNotifications } from '~/server/api/notifications'
 import { queryKeys } from '~/lib/query/keys'
+import {
+  applyPendingCheckoutCountDecrement,
+  applyPendingReservationRequestCountDecrement,
+} from '~/lib/query/optimistic-admin'
 import {
   machinesListQueryOptions,
   myUpcomingCheckoutAppointmentsQueryOptions,
@@ -65,6 +75,52 @@ interface QueueItem {
     params?: Record<string, string>
     search?: Record<string, string>
   }
+}
+
+type AdminActionItem =
+  | {
+      id: string
+      source: 'booking'
+      reservationId: string
+      requestedAt: DateValue
+      memberName: string
+      memberEmail: string
+      machineName: string
+      startTime: DateValue
+      endTime: DateValue
+    }
+  | {
+      id: string
+      source: 'checkout'
+      appointmentId: string
+      checkoutStatus: 'pending' | 'accepted'
+      requestedAt: DateValue
+      memberName: string
+      memberEmail: string
+      machineName: string
+      managerName: string
+      reviewerName?: string | null
+      startTime: DateValue
+      endTime: DateValue
+    }
+
+interface PendingCheckoutListData {
+  pendingApprovals: Array<{ appointmentId: string }>
+  actionableAppointments?: Array<{
+    appointmentId: string
+    status: 'pending' | 'accepted'
+  }>
+}
+
+interface PendingReservationRequestListData {
+  requests: Array<{ id: string }>
+}
+
+interface DashboardQueryState {
+  isPending: boolean
+  isFetching: boolean
+  dataUpdatedAt: number
+  data: unknown
 }
 
 interface TimelineItem {
@@ -118,8 +174,27 @@ function getQueueTone(kind: QueueItem['kind']) {
   return 'border-l-emerald-500'
 }
 
+function getAdminQueueTone(source: AdminActionItem['source']) {
+  if (source === 'booking') return 'border-l-amber-500'
+  return 'border-l-sky-500'
+}
+
+function formatDuration(start: DateValue, end: DateValue) {
+  const minutes = Math.max(
+    0,
+    Math.round((toDate(end).getTime() - toDate(start).getTime()) / 60000),
+  )
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+
+  if (hours === 0) return `${remainingMinutes}m`
+  if (remainingMinutes === 0) return `${hours}h`
+  return `${hours}h ${remainingMinutes}m`
+}
+
 export function Dashboard({ user }: DashboardProps) {
   const [searchQuery, setSearchQuery] = useState('')
+  const [actingActionId, setActingActionId] = useState<string | null>(null)
   const [markingNotificationId, setMarkingNotificationId] = useState<
     string | null
   >(null)
@@ -167,6 +242,9 @@ export function Dashboard({ user }: DashboardProps) {
   )
   const pendingCheckoutCount = pendingCheckoutCountQuery.data?.count ?? 0
   const pendingApprovals = asArray(pendingApprovalsQuery.data?.pendingApprovals)
+  const actionableCheckoutAppointments = asArray(
+    pendingApprovalsQuery.data?.actionableAppointments,
+  )
   const pendingRequestCount = pendingRequestCountQuery.data?.count ?? 0
   const pendingRequests = asArray(pendingRequestsQuery.data?.requests)
 
@@ -211,13 +289,6 @@ export function Dashboard({ user }: DashboardProps) {
 
     await Promise.all(invalidations)
   }, [isAdmin, queryClient])
-
-  interface DashboardQueryState {
-    isPending: boolean
-    isFetching: boolean
-    dataUpdatedAt: number
-    data: unknown
-  }
 
   const loadingQueries: DashboardQueryState[] = [
     unreadCountQuery,
@@ -438,6 +509,432 @@ export function Dashboard({ user }: DashboardProps) {
     }
   }
 
+  const moderateCheckoutMutation = useMutation({
+    meta: {
+      errorMessage: 'Unable to update checkout request',
+    },
+    mutationFn: async (variables: {
+      appointmentId: string
+      decision: 'accept' | 'reject'
+      reason?: string
+    }) => {
+      const result = await moderateCheckoutRequest({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Unable to update checkout request')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await Promise.all([
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingCheckouts(),
+        }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingCheckoutCount(),
+        }),
+      ])
+
+      const previousPendingApprovals =
+        queryClient.getQueryData<PendingCheckoutListData>(
+          queryKeys.admin.pendingCheckouts(),
+        )
+      const previousPendingCheckoutCount = queryClient.getQueryData<{
+        count: number
+      }>(queryKeys.admin.pendingCheckoutCount())
+
+      queryClient.setQueryData<PendingCheckoutListData>(
+        queryKeys.admin.pendingCheckouts(),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            pendingApprovals: current.pendingApprovals.filter(
+              (item) => item.appointmentId !== variables.appointmentId,
+            ),
+            actionableAppointments: current.actionableAppointments?.flatMap(
+              (item) => {
+                if (item.appointmentId !== variables.appointmentId) {
+                  return [item]
+                }
+
+                if (variables.decision === 'accept') {
+                  return [{ ...item, status: 'accepted' as const }]
+                }
+
+                return []
+              },
+            ),
+          }
+        },
+      )
+
+      queryClient.setQueryData<{ count: number }>(
+        queryKeys.admin.pendingCheckoutCount(),
+        applyPendingCheckoutCountDecrement,
+      )
+
+      return {
+        previousPendingApprovals,
+        previousPendingCheckoutCount,
+      }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousPendingApprovals) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingCheckouts(),
+          context.previousPendingApprovals,
+        )
+      }
+      if (context?.previousPendingCheckoutCount) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingCheckoutCount(),
+          context.previousPendingCheckoutCount,
+        )
+      }
+    },
+    onSettled: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingCheckouts(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingCheckoutCount(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.checkouts(),
+        }),
+      ])
+    },
+  })
+
+  const moderateBookingMutation = useMutation({
+    meta: {
+      errorMessage: 'Unable to update booking request',
+    },
+    mutationFn: async (variables: {
+      reservationId: string
+      decision: 'approve' | 'reject'
+      reason?: string
+    }) => {
+      const result = await moderateReservationRequest({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Unable to update booking request')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await Promise.all([
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingReservationRequests(),
+        }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingReservationRequestCount(),
+        }),
+      ])
+
+      const previousPendingRequests =
+        queryClient.getQueryData<PendingReservationRequestListData>(
+          queryKeys.admin.pendingReservationRequests(),
+        )
+      const previousPendingRequestCount = queryClient.getQueryData<{
+        count: number
+      }>(queryKeys.admin.pendingReservationRequestCount())
+
+      queryClient.setQueryData<PendingReservationRequestListData>(
+        queryKeys.admin.pendingReservationRequests(),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            requests: current.requests.filter(
+              (item) => item.id !== variables.reservationId,
+            ),
+          }
+        },
+      )
+
+      queryClient.setQueryData<{ count: number }>(
+        queryKeys.admin.pendingReservationRequestCount(),
+        applyPendingReservationRequestCountDecrement,
+      )
+
+      return {
+        previousPendingRequests,
+        previousPendingRequestCount,
+      }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousPendingRequests) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingReservationRequests(),
+          context.previousPendingRequests,
+        )
+      }
+      if (context?.previousPendingRequestCount) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingReservationRequestCount(),
+          context.previousPendingRequestCount,
+        )
+      }
+    },
+    onSettled: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingReservationRequests(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingReservationRequestCount(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.bookingRequests(),
+        }),
+      ])
+    },
+  })
+
+  const finalizeCheckoutMutation = useMutation({
+    meta: {
+      errorMessage: 'Unable to finalize checkout meeting',
+    },
+    mutationFn: async (variables: {
+      appointmentId: string
+      result: 'pass' | 'fail'
+      notes?: string
+    }) => {
+      const result = await finalizeCheckoutMeeting({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Unable to finalize checkout meeting')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.admin.pendingCheckouts(),
+      })
+
+      const previousPendingApprovals =
+        queryClient.getQueryData<PendingCheckoutListData>(
+          queryKeys.admin.pendingCheckouts(),
+        )
+
+      queryClient.setQueryData<PendingCheckoutListData>(
+        queryKeys.admin.pendingCheckouts(),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            actionableAppointments: current.actionableAppointments?.filter(
+              (item) => item.appointmentId !== variables.appointmentId,
+            ),
+          }
+        },
+      )
+
+      return { previousPendingApprovals }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousPendingApprovals) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingCheckouts(),
+          context.previousPendingApprovals,
+        )
+      }
+    },
+    onSettled: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingCheckouts(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.checkouts(),
+        }),
+      ])
+    },
+  })
+
+  const cancelAcceptedCheckoutMutation = useMutation({
+    meta: {
+      errorMessage: 'Unable to cancel checkout meeting',
+    },
+    mutationFn: async (variables: { appointmentId: string; reason: string }) => {
+      const result = await cancelCheckoutAppointment({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Unable to cancel checkout meeting')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.admin.pendingCheckouts(),
+      })
+
+      const previousPendingApprovals =
+        queryClient.getQueryData<PendingCheckoutListData>(
+          queryKeys.admin.pendingCheckouts(),
+        )
+
+      queryClient.setQueryData<PendingCheckoutListData>(
+        queryKeys.admin.pendingCheckouts(),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            actionableAppointments: current.actionableAppointments?.filter(
+              (item) => item.appointmentId !== variables.appointmentId,
+            ),
+          }
+        },
+      )
+
+      return { previousPendingApprovals }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousPendingApprovals) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingCheckouts(),
+          context.previousPendingApprovals,
+        )
+      }
+    },
+    onSettled: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.pendingCheckouts(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.checkouts(),
+        }),
+      ])
+    },
+  })
+
+  const handleModerateAction = async (
+    item: AdminActionItem,
+    decision: 'approve' | 'deny',
+  ) => {
+    let reason: string | undefined
+
+    if (decision === 'deny') {
+      const promptLabel =
+        item.source === 'checkout'
+          ? 'Denial reason (required):'
+          : 'Denial reason (optional):'
+      const rawValue = prompt(promptLabel)
+      if (rawValue === null) {
+        return
+      }
+      const value = rawValue.trim()
+
+      if (item.source === 'checkout' && !value) {
+        return
+      }
+
+      reason = value || undefined
+    }
+
+    const nextActingActionId = `${item.id}:${decision}`
+    setActingActionId(nextActingActionId)
+
+    try {
+      if (item.source === 'checkout') {
+        await moderateCheckoutMutation.mutateAsync({
+          appointmentId: item.appointmentId,
+          decision: decision === 'approve' ? 'accept' : 'reject',
+          reason,
+        })
+      } else {
+        await moderateBookingMutation.mutateAsync({
+          reservationId: item.reservationId,
+          decision: decision === 'approve' ? 'approve' : 'reject',
+          reason,
+        })
+      }
+    } catch {
+      // Error handling and rollback is managed in mutation callbacks.
+    } finally {
+      setActingActionId(null)
+    }
+  }
+
+  const handleFinalizeCheckoutAction = async (
+    item: Extract<AdminActionItem, { source: 'checkout' }>,
+    resultType: 'pass' | 'fail',
+  ) => {
+    const startTime = toDate(item.startTime)
+
+    if (startTime > new Date()) {
+      const confirmed = confirm(
+        `This meeting is scheduled for ${formatDateTime(
+          startTime,
+        )} and has not started yet. Record a ${resultType} result now?`,
+      )
+      if (!confirmed) return
+    }
+
+    const notes = prompt(
+      resultType === 'pass'
+        ? 'Optional notes for pass:'
+        : 'Optional notes for fail (member can retry later):',
+    )
+    if (notes === null) return
+
+    const nextActingActionId = `${item.id}:${resultType}`
+    setActingActionId(nextActingActionId)
+
+    try {
+      await finalizeCheckoutMutation.mutateAsync({
+        appointmentId: item.appointmentId,
+        result: resultType,
+        notes: notes.trim() || undefined,
+      })
+    } catch {
+      // Error handling and rollback is managed in mutation callbacks.
+    } finally {
+      setActingActionId(null)
+    }
+  }
+
+  const handleCancelAcceptedCheckoutAction = async (
+    item: Extract<AdminActionItem, { source: 'checkout' }>,
+  ) => {
+    const reason = prompt('Cancellation reason (required):')
+    if (reason === null || !reason.trim()) return
+
+    const nextActingActionId = `${item.id}:cancel`
+    setActingActionId(nextActingActionId)
+
+    try {
+      await cancelAcceptedCheckoutMutation.mutateAsync({
+        appointmentId: item.appointmentId,
+        reason: reason.trim(),
+      })
+    } catch {
+      // Error handling and rollback is managed in mutation callbacks.
+    } finally {
+      setActingActionId(null)
+    }
+  }
+
   const reservationSummary = useMemo(() => {
     const now = new Date()
 
@@ -498,38 +995,48 @@ export function Dashboard({ user }: DashboardProps) {
       .slice(0, 10)
   }, [reservationSummary.upcoming, upcomingCheckoutAppointments, user.role])
 
-  const queueItems = useMemo(() => {
-    const approvalItems: QueueItem[] = pendingApprovals
-      .slice(0, 8)
+  const adminActionItems = useMemo(() => {
+    if (!isAdmin) return []
+
+    const bookingItems: AdminActionItem[] = pendingRequests.map((item) => ({
+      id: `booking-${item.id}`,
+      source: 'booking',
+      reservationId: item.id,
+      requestedAt: item.createdAt,
+      memberName: item.user.name || item.user.email,
+      memberEmail: item.user.email,
+      machineName: item.machine.name,
+      startTime: item.startTime,
+      endTime: item.endTime,
+    }))
+
+    const checkoutItems: AdminActionItem[] = actionableCheckoutAppointments
+      .filter(
+        (item) => item.status === 'pending' || item.status === 'accepted',
+      )
       .map((item) => ({
-        id: `approval-${item.appointmentId}`,
-        title: 'Checkout request pending',
-        subtitle: `${item.user.name || item.user.email}`,
-        description: `${item.machine.name} · ${formatCompact(item.startTime)}`,
-        kind: 'approval',
-        priority: 2,
-        action: {
-          label: 'Review queue',
-          to: '/admin/checkouts',
-        },
+        id: `checkout-${item.appointmentId}`,
+        source: 'checkout',
+        appointmentId: item.appointmentId,
+        checkoutStatus: item.status as 'pending' | 'accepted',
+        requestedAt: item.createdAt,
+        memberName: item.user.name || item.user.email,
+        memberEmail: item.user.email,
+        machineName: item.machine.name,
+        managerName: item.manager.name || item.manager.email,
+        reviewerName: item.reviewer?.name || item.reviewer?.email || null,
+        startTime: item.startTime,
+        endTime: item.endTime,
       }))
 
-    const requestItems: QueueItem[] = pendingRequests
-      .slice(0, 8)
-      .map((item) => ({
-        id: `request-${item.id}`,
-        title: 'Reservation request pending',
-        subtitle: `${item.user.name || item.user.email}`,
-        description: `${item.machine.name} · ${formatCompact(item.startTime)}`,
-        kind: 'request',
-        priority: 3,
-        time: item.createdAt,
-        action: {
-          label: 'Moderate request',
-          to: '/admin/booking-requests',
-          search: { view: 'pending', q: '' },
-        },
-      }))
+    return [...bookingItems, ...checkoutItems].sort(
+      (left, right) =>
+        toDate(left.requestedAt).getTime() - toDate(right.requestedAt).getTime(),
+    )
+  }, [actionableCheckoutAppointments, isAdmin, pendingRequests])
+
+  const queueItems = useMemo(() => {
+    if (isAdmin) return []
 
     const alertItems: QueueItem[] = notifications
       .filter((item) => !item.readAt)
@@ -544,17 +1051,15 @@ export function Dashboard({ user }: DashboardProps) {
         time: item.createdAt,
       }))
 
-    return [...requestItems, ...approvalItems, ...alertItems]
+    return alertItems
       .sort((left, right) => {
-        if (left.priority !== right.priority)
-          return right.priority - left.priority
         if (!left.time && !right.time) return 0
         if (!left.time) return 1
         if (!right.time) return -1
         return toDate(right.time).getTime() - toDate(left.time).getTime()
       })
       .slice(0, 14)
-  }, [notifications, pendingApprovals, pendingRequests])
+  }, [isAdmin, notifications])
 
   const readyMachines = machines.filter(
     (machine) => machine.eligibility.eligible,
@@ -571,6 +1076,21 @@ export function Dashboard({ user }: DashboardProps) {
       item.title.toLowerCase().includes(query) ||
       item.subtitle.toLowerCase().includes(query) ||
       item.description.toLowerCase().includes(query)
+    )
+  })
+
+  const filteredAdminActionItems = adminActionItems.filter((item) => {
+    if (!searchQuery.trim()) return true
+    const query = searchQuery.trim().toLowerCase()
+
+    return (
+      item.machineName.toLowerCase().includes(query) ||
+      item.memberName.toLowerCase().includes(query) ||
+      item.memberEmail.toLowerCase().includes(query) ||
+      (item.source === 'checkout' &&
+        (item.managerName.toLowerCase().includes(query) ||
+          item.checkoutStatus.toLowerCase().includes(query) ||
+          (item.reviewerName || '').toLowerCase().includes(query)))
     )
   })
 
@@ -598,20 +1118,158 @@ export function Dashboard({ user }: DashboardProps) {
   return (
     <main className='space-y-4 p-4 md:space-y-6 md:p-6 lg:p-8'>
       <div className='grid gap-4 xl:grid-cols-12'>
-        <Card className='bg-card/80 xl:col-span-5'>
+        <Card className='bg-card/80 xl:col-span-12'>
           <CardHeader>
             <div className='flex items-center justify-between gap-2'>
               <div>
                 <CardTitle className='text-base'>Action Queue</CardTitle>
                 <CardDescription>
-                  Most urgent tasks sorted by operational priority.
+                  {isAdmin
+                    ? 'All admin-actionable booking and checkout items, sorted by request time.'
+                    : 'Unread operational alerts.'}
                 </CardDescription>
               </div>
-              <Badge variant='warning'>{filteredQueueItems.length}</Badge>
+              <Badge variant='warning'>
+                {isAdmin
+                  ? filteredAdminActionItems.length
+                  : filteredQueueItems.length}
+              </Badge>
             </div>
           </CardHeader>
-          <CardContent className='space-y-2'>
-            {filteredQueueItems.length > 0 ? (
+          <CardContent className='space-y-3'>
+            {isAdmin ? (
+              filteredAdminActionItems.length > 0 ? (
+                filteredAdminActionItems.map((item) => {
+                  const approving = actingActionId === `${item.id}:approve`
+                  const denying = actingActionId === `${item.id}:deny`
+                  const passing = actingActionId === `${item.id}:pass`
+                  const failing = actingActionId === `${item.id}:fail`
+                  const cancelling = actingActionId === `${item.id}:cancel`
+                  const isAcceptedCheckout =
+                    item.source === 'checkout' && item.checkoutStatus === 'accepted'
+
+                  return (
+                    <article
+                      key={item.id}
+                      className={cn(
+                        'rounded-xl border border-border/80 border-l-4 bg-background/60 p-3 sm:p-4',
+                        getAdminQueueTone(item.source),
+                      )}
+                    >
+                      <div className='flex flex-wrap items-start justify-between gap-2'>
+                        <div className='space-y-1'>
+                          <div className='flex flex-wrap items-center gap-2'>
+                            <Badge
+                              variant={
+                                item.source === 'booking'
+                                  ? 'warning'
+                                  : isAcceptedCheckout
+                                    ? 'success'
+                                    : 'info'
+                              }
+                            >
+                              {item.source === 'booking'
+                                ? 'Booking Request'
+                                : isAcceptedCheckout
+                                  ? 'Checkout Accepted'
+                                  : 'Checkout Request'}
+                            </Badge>
+                            <span className='text-xs text-muted-foreground'>
+                              Requested {formatCompact(item.requestedAt)}
+                            </span>
+                          </div>
+                          <p className='text-sm font-semibold'>
+                            {item.machineName}
+                          </p>
+                          <p className='text-xs text-muted-foreground'>
+                            {item.memberName}
+                            {item.memberName !== item.memberEmail
+                              ? ` (${item.memberEmail})`
+                              : ''}
+                          </p>
+                          {item.source === 'checkout' && (
+                            <p className='text-xs text-muted-foreground'>
+                              Manager: {item.managerName}
+                              {item.reviewerName && isAcceptedCheckout
+                                ? ` · Accepted by ${item.reviewerName}`
+                                : ''}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className='mt-2 grid gap-1 text-sm text-muted-foreground sm:grid-cols-2'>
+                        <p>Start: {formatDateTime(item.startTime)}</p>
+                        <p>End: {formatDateTime(item.endTime)}</p>
+                        <p>
+                          Duration: {formatDuration(item.startTime, item.endTime)}
+                        </p>
+                      </div>
+
+                      {isAcceptedCheckout ? (
+                        <div className='mt-3 grid grid-cols-3 gap-2 sm:max-w-md'>
+                          <Button
+                            size='sm'
+                            onClick={() => {
+                              void handleFinalizeCheckoutAction(item, 'pass')
+                            }}
+                            disabled={passing || failing || cancelling}
+                          >
+                            {passing ? 'Saving...' : 'Pass'}
+                          </Button>
+                          <Button
+                            size='sm'
+                            variant='destructive'
+                            onClick={() => {
+                              void handleFinalizeCheckoutAction(item, 'fail')
+                            }}
+                            disabled={passing || failing || cancelling}
+                          >
+                            {failing ? 'Saving...' : 'Fail'}
+                          </Button>
+                          <Button
+                            size='sm'
+                            variant='secondary'
+                            onClick={() => {
+                              void handleCancelAcceptedCheckoutAction(item)
+                            }}
+                            disabled={passing || failing || cancelling}
+                          >
+                            {cancelling ? 'Saving...' : 'Cancel'}
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className='mt-3 grid grid-cols-2 gap-2 sm:max-w-xs'>
+                          <Button
+                            size='sm'
+                            onClick={() => {
+                              void handleModerateAction(item, 'approve')
+                            }}
+                            disabled={approving || denying}
+                          >
+                            {approving ? 'Approving...' : 'Approve'}
+                          </Button>
+                          <Button
+                            size='sm'
+                            variant='destructive'
+                            onClick={() => {
+                              void handleModerateAction(item, 'deny')
+                            }}
+                            disabled={approving || denying}
+                          >
+                            {denying ? 'Denying...' : 'Deny'}
+                          </Button>
+                        </div>
+                      )}
+                    </article>
+                  )
+                })
+              ) : (
+                <p className='text-sm text-muted-foreground'>
+                  No actionable booking or checkout items.
+                </p>
+              )
+            ) : filteredQueueItems.length > 0 ? (
               filteredQueueItems.map((item) => (
                 <div
                   key={item.id}
