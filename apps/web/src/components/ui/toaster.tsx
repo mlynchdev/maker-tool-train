@@ -56,7 +56,7 @@ export function useErrorToasts() {
         tone: 'error',
       }
 
-      setToasts((previous) => [...previous, toast].slice(-4))
+      setToasts((previous) => [...previous, toast])
 
       const timer = setTimeout(() => {
         dismissToast(id)

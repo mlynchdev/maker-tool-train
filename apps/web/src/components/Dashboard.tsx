@@ -1,46 +1,26 @@
 import { Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Bell,
-  BellRing,
-  CheckCircle2,
-  ChevronRight,
-  Clock3,
-  RefreshCw,
-  Search,
-  XCircle,
-} from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
-import {
-  markAllMyNotificationsRead,
-  markMyNotificationRead,
-} from '~/server/api/notifications'
+import { ChevronRight } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import {
   cancelCheckoutAppointment,
   finalizeCheckoutMeeting,
   moderateCheckoutRequest,
   moderateReservationRequest,
 } from '~/server/api/admin'
-import type { getNotifications } from '~/server/api/notifications'
 import { queryKeys } from '~/lib/query/keys'
 import {
   applyPendingCheckoutCountDecrement,
   applyPendingReservationRequestCountDecrement,
 } from '~/lib/query/optimistic-admin'
 import {
-  machinesListQueryOptions,
-  myUpcomingCheckoutAppointmentsQueryOptions,
   notificationsListQueryOptions,
-  pendingCheckoutCountQueryOptions,
   pendingCheckoutsQueryOptions,
-  pendingReservationRequestCountQueryOptions,
   pendingReservationRequestsQueryOptions,
-  reservationsListQueryOptions,
-  trainingStatusQueryOptions,
-  unreadNotificationCountQueryOptions,
 } from '~/lib/query/options'
 import type { AuthUser } from '~/server/auth/types'
 import { cn } from '~/lib/utils'
+import { Alert, AlertDescription } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import {
@@ -51,6 +31,7 @@ import {
   CardTitle,
 } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
+import { Label } from '~/components/ui/label'
 import { Progress } from '~/components/ui/progress'
 
 interface DashboardProps {
@@ -59,15 +40,12 @@ interface DashboardProps {
 
 type DateValue = Date | string
 
-type NotificationsPayload = Awaited<ReturnType<typeof getNotifications>>
-
 interface QueueItem {
   id: string
   title: string
   subtitle: string
   description: string
   kind: 'request' | 'approval' | 'alert'
-  priority: number
   time?: DateValue
   action?: {
     label: string
@@ -116,28 +94,23 @@ interface PendingReservationRequestListData {
   requests: Array<{ id: string }>
 }
 
+type AdminAction = 'approve' | 'deny' | 'pass' | 'fail' | 'cancel'
+
 interface DashboardQueryState {
   isPending: boolean
   isFetching: boolean
-  dataUpdatedAt: number
   data: unknown
 }
 
-interface TimelineItem {
-  id: string
-  title: string
-  subtitle: string
-  kind: 'reservation' | 'checkout'
-  startsAt: DateValue
+interface AdminActionEditorState {
+  itemId: string
+  action: AdminAction
+  value: string
+  confirmed: boolean
+  error: string | null
 }
 
-const ACTIVE_RESERVATION_STATUSES = [
-  'pending',
-  'approved',
-  'confirmed',
-] as const
 const DASHBOARD_NOTIFICATION_OPTIONS = { unreadOnly: false, limit: 10 } as const
-const DASHBOARD_RESERVATIONS_OPTIONS = { includesPast: true } as const
 
 function asArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : []
@@ -192,39 +165,101 @@ function formatDuration(start: DateValue, end: DateValue) {
   return `${hours}h ${remainingMinutes}m`
 }
 
+function actionRequiresValue(item: AdminActionItem, action: AdminAction) {
+  return action === 'cancel' || (action === 'deny' && item.source === 'checkout')
+}
+
+function actionShowsValueInput(action: AdminAction) {
+  return action !== 'approve'
+}
+
+function actionNeedsEarlyConfirmation(
+  item: AdminActionItem,
+  action: AdminAction,
+) {
+  return (
+    item.source === 'checkout' &&
+    (action === 'pass' || action === 'fail') &&
+    toDate(item.startTime) > new Date()
+  )
+}
+
+function getActionEditorCopy(item: AdminActionItem, action: AdminAction) {
+  switch (action) {
+    case 'approve':
+      return {
+        title:
+          item.source === 'checkout'
+            ? 'Approve checkout request'
+            : 'Approve booking request',
+        description:
+          item.source === 'checkout'
+            ? 'This request will move into the accepted checkout queue.'
+            : 'This request will be approved for the member.',
+        submitLabel: 'Confirm approval',
+      }
+    case 'deny':
+      return {
+        title:
+          item.source === 'checkout'
+            ? 'Deny checkout request'
+            : 'Deny booking request',
+        description:
+          item.source === 'checkout'
+            ? 'Checkout denials require a reason.'
+            : 'A denial reason is optional for booking requests.',
+        inputLabel: 'Denial reason',
+        inputPlaceholder:
+          item.source === 'checkout'
+            ? 'Enter the reason for denying this checkout request'
+            : 'Optional reason for denying this booking request',
+        submitLabel: 'Submit denial',
+      }
+    case 'pass':
+      return {
+        title: 'Mark checkout as passed',
+        description: 'Record a passing result for this checkout meeting.',
+        inputLabel: 'Pass notes',
+        inputPlaceholder: 'Optional notes for pass',
+        submitLabel: 'Record pass',
+      }
+    case 'fail':
+      return {
+        title: 'Mark checkout as failed',
+        description:
+          'Record a failed result for this checkout meeting. The member can retry later.',
+        inputLabel: 'Fail notes',
+        inputPlaceholder: 'Optional notes for fail',
+        submitLabel: 'Record fail',
+      }
+    case 'cancel':
+      return {
+        title: 'Cancel accepted checkout',
+        description: 'A cancellation reason is required before this meeting can be cancelled.',
+        inputLabel: 'Cancellation reason',
+        inputPlaceholder: 'Enter the cancellation reason',
+        submitLabel: 'Confirm cancellation',
+      }
+  }
+}
+
 export function Dashboard({ user }: DashboardProps) {
-  const [searchQuery, setSearchQuery] = useState('')
   const [actingActionId, setActingActionId] = useState<string | null>(null)
-  const [markingNotificationId, setMarkingNotificationId] = useState<
-    string | null
-  >(null)
-  const [markingAll, setMarkingAll] = useState(false)
+  const [actionEditor, setActionEditor] = useState<AdminActionEditorState | null>(
+    null,
+  )
   const queryClient = useQueryClient()
 
   const isAdmin = user.role === 'admin'
 
-  const unreadCountQuery = useQuery(unreadNotificationCountQueryOptions())
   const notificationsQuery = useQuery(
-    notificationsListQueryOptions(DASHBOARD_NOTIFICATION_OPTIONS),
+    {
+      ...notificationsListQueryOptions(DASHBOARD_NOTIFICATION_OPTIONS),
+      enabled: !isAdmin,
+    },
   )
-  const trainingStatusQuery = useQuery(trainingStatusQueryOptions())
-  const reservationsQuery = useQuery(
-    reservationsListQueryOptions(DASHBOARD_RESERVATIONS_OPTIONS),
-  )
-  const machinesQuery = useQuery(machinesListQueryOptions())
-  const upcomingCheckoutAppointmentsQuery = useQuery(
-    myUpcomingCheckoutAppointmentsQueryOptions(),
-  )
-  const pendingCheckoutCountQuery = useQuery({
-    ...pendingCheckoutCountQueryOptions(),
-    enabled: isAdmin,
-  })
   const pendingApprovalsQuery = useQuery({
     ...pendingCheckoutsQueryOptions(),
-    enabled: isAdmin,
-  })
-  const pendingRequestCountQuery = useQuery({
-    ...pendingReservationRequestCountQueryOptions(),
     enabled: isAdmin,
   })
   const pendingRequestsQuery = useQuery({
@@ -232,282 +267,19 @@ export function Dashboard({ user }: DashboardProps) {
     enabled: isAdmin,
   })
 
-  const unreadNotifications = unreadCountQuery.data?.count ?? 0
   const notifications = asArray(notificationsQuery.data?.notifications)
-  const trainingStatus = trainingStatusQuery.data ?? null
-  const reservations = asArray(reservationsQuery.data?.reservations)
-  const machines = asArray(machinesQuery.data?.machines)
-  const upcomingCheckoutAppointments = asArray(
-    upcomingCheckoutAppointmentsQuery.data?.appointments,
-  )
-  const pendingCheckoutCount = pendingCheckoutCountQuery.data?.count ?? 0
-  const pendingApprovals = asArray(pendingApprovalsQuery.data?.pendingApprovals)
   const actionableCheckoutAppointments = asArray(
     pendingApprovalsQuery.data?.actionableAppointments,
   )
-  const pendingRequestCount = pendingRequestCountQuery.data?.count ?? 0
   const pendingRequests = asArray(pendingRequestsQuery.data?.requests)
 
-  const refreshDashboardData = useCallback(async () => {
-    const invalidations = [
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.notifications.unreadCount(),
-      }),
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-      }),
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.training.status(),
-      }),
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.reservations.mine(DASHBOARD_RESERVATIONS_OPTIONS),
-      }),
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.machines.list(),
-      }),
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.machines.myUpcomingCheckoutAppointments(),
-      }),
-    ]
-
-    if (isAdmin) {
-      invalidations.push(
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.admin.pendingCheckoutCount(),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.admin.pendingCheckouts(),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.admin.pendingReservationRequestCount(),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.admin.pendingReservationRequests(),
-        }),
-      )
-    }
-
-    await Promise.all(invalidations)
-  }, [isAdmin, queryClient])
-
-  const loadingQueries: DashboardQueryState[] = [
-    unreadCountQuery,
-    notificationsQuery,
-    trainingStatusQuery,
-    reservationsQuery,
-    machinesQuery,
-    upcomingCheckoutAppointmentsQuery,
-  ]
-
-  if (isAdmin) {
-    loadingQueries.push(
-      pendingCheckoutCountQuery,
-      pendingApprovalsQuery,
-      pendingRequestCountQuery,
-      pendingRequestsQuery,
-    )
-  }
-
-  const primaryQueries: DashboardQueryState[] = [
-    unreadCountQuery,
-    notificationsQuery,
-    trainingStatusQuery,
-    reservationsQuery,
-    machinesQuery,
-  ]
-  const hasPrimaryData = primaryQueries.some(
-    (query) => typeof query.data !== 'undefined',
-  )
+  const visibleQueries: DashboardQueryState[] = isAdmin
+    ? [pendingApprovalsQuery, pendingRequestsQuery]
+    : [notificationsQuery]
+  const hasVisibleData = visibleQueries.some((query) => typeof query.data !== 'undefined')
   const loading =
-    !hasPrimaryData &&
-    primaryQueries.some((query) => query.isPending || query.isFetching)
-  const refreshing = loadingQueries.some((query) => query.isFetching)
-  const refreshTimestamps = loadingQueries
-    .map((query) => query.dataUpdatedAt)
-    .filter((value) => value > 0)
-  const lastRefreshedAt =
-    refreshTimestamps.length > 0
-      ? new Date(Math.max(...refreshTimestamps))
-      : null
-
-  const markNotificationReadMutation = useMutation({
-    meta: {
-      errorMessage: 'Failed to mark notification as read',
-    },
-    mutationFn: async (variables: { notificationId: string }) => {
-      const result = await markMyNotificationRead({ data: variables })
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to mark notification as read')
-      }
-      return result
-    },
-    onMutate: async (variables) => {
-      await Promise.all([
-        queryClient.cancelQueries({
-          queryKey: queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-        }),
-        queryClient.cancelQueries({
-          queryKey: queryKeys.notifications.unreadCount(),
-        }),
-      ])
-
-      const previousNotifications = queryClient.getQueryData<NotificationsPayload>(
-        queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS)
-      )
-      const previousUnreadCount = queryClient.getQueryData<{ count: number }>(
-        queryKeys.notifications.unreadCount()
-      )
-
-      queryClient.setQueryData<NotificationsPayload>(
-        queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-        (current) => {
-          if (!current) return current
-
-          return {
-            ...current,
-            notifications: current.notifications.map((item) =>
-              item.id === variables.notificationId
-                ? { ...item, readAt: new Date() }
-                : item,
-            ),
-          }
-        },
-      )
-
-      queryClient.setQueryData<{ count: number }>(
-        queryKeys.notifications.unreadCount(),
-        (current) => {
-          if (!current) return current
-          return { count: Math.max(current.count - 1, 0) }
-        },
-      )
-
-      return {
-        previousNotifications,
-        previousUnreadCount,
-      }
-    },
-    onError: (_error, _variables, context) => {
-      if (context?.previousNotifications) {
-        queryClient.setQueryData(
-          queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-          context.previousNotifications
-        )
-      }
-      if (context?.previousUnreadCount) {
-        queryClient.setQueryData(
-          queryKeys.notifications.unreadCount(),
-          context.previousUnreadCount
-        )
-      }
-    },
-    onSettled: () => {
-      void Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.notifications.unreadCount(),
-        }),
-      ])
-    },
-  })
-
-  const markAllNotificationsReadMutation = useMutation({
-    meta: {
-      errorMessage: 'Failed to mark all notifications as read',
-    },
-    mutationFn: async () => {
-      return markAllMyNotificationsRead()
-    },
-    onMutate: async () => {
-      await Promise.all([
-        queryClient.cancelQueries({
-          queryKey: queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-        }),
-        queryClient.cancelQueries({
-          queryKey: queryKeys.notifications.unreadCount(),
-        }),
-      ])
-
-      const previousNotifications = queryClient.getQueryData<NotificationsPayload>(
-        queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS)
-      )
-      const previousUnreadCount = queryClient.getQueryData<{ count: number }>(
-        queryKeys.notifications.unreadCount()
-      )
-
-      queryClient.setQueryData<NotificationsPayload>(
-        queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-        (current) => {
-          if (!current) return current
-
-          return {
-            ...current,
-            notifications: current.notifications.map((item) => ({
-              ...item,
-              readAt: new Date(),
-            })),
-          }
-        },
-      )
-
-      queryClient.setQueryData(queryKeys.notifications.unreadCount(), {
-        count: 0,
-      })
-
-      return {
-        previousNotifications,
-        previousUnreadCount,
-      }
-    },
-    onError: (_error, _variables, context) => {
-      if (context?.previousNotifications) {
-        queryClient.setQueryData(
-          queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-          context.previousNotifications
-        )
-      }
-      if (context?.previousUnreadCount) {
-        queryClient.setQueryData(
-          queryKeys.notifications.unreadCount(),
-          context.previousUnreadCount
-        )
-      }
-    },
-    onSettled: () => {
-      void Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.notifications.list(DASHBOARD_NOTIFICATION_OPTIONS),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.notifications.unreadCount(),
-        }),
-      ])
-    },
-  })
-
-  const handleMarkRead = async (notificationId: string) => {
-    setMarkingNotificationId(notificationId)
-    try {
-      await markNotificationReadMutation.mutateAsync({ notificationId })
-    } catch {
-      // Error handling and rollback is managed in mutation callbacks.
-    } finally {
-      setMarkingNotificationId(null)
-    }
-  }
-
-  const handleMarkAllRead = async () => {
-    setMarkingAll(true)
-    try {
-      await markAllNotificationsReadMutation.mutateAsync()
-    } catch {
-      // Error handling and rollback is managed in mutation callbacks.
-    } finally {
-      setMarkingAll(false)
-    }
-  }
+    !hasVisibleData &&
+    visibleQueries.some((query) => query.isPending || query.isFetching)
 
   const moderateCheckoutMutation = useMutation({
     meta: {
@@ -828,172 +600,85 @@ export function Dashboard({ user }: DashboardProps) {
     },
   })
 
-  const handleModerateAction = async (
-    item: AdminActionItem,
-    decision: 'approve' | 'deny',
-  ) => {
-    let reason: string | undefined
+  const openActionEditor = (item: AdminActionItem, action: AdminAction) => {
+    setActionEditor({
+      itemId: item.id,
+      action,
+      value: '',
+      confirmed: !actionNeedsEarlyConfirmation(item, action),
+      error: null,
+    })
+  }
 
-    if (decision === 'deny') {
-      const promptLabel =
-        item.source === 'checkout'
-          ? 'Denial reason (required):'
-          : 'Denial reason (optional):'
-      const rawValue = prompt(promptLabel)
-      if (rawValue === null) {
-        return
-      }
-      const value = rawValue.trim()
+  const handleActionEditorSubmit = async (item: AdminActionItem) => {
+    if (!actionEditor || actionEditor.itemId !== item.id) return
 
-      if (item.source === 'checkout' && !value) {
-        return
-      }
+    const trimmedValue = actionEditor.value.trim()
 
-      reason = value || undefined
+    if (actionRequiresValue(item, actionEditor.action) && !trimmedValue) {
+      setActionEditor({
+        ...actionEditor,
+        error:
+          actionEditor.action === 'cancel'
+            ? 'Cancellation reason is required.'
+            : 'Denial reason is required for checkout requests.',
+      })
+      return
     }
 
-    const nextActingActionId = `${item.id}:${decision}`
+    if (
+      actionNeedsEarlyConfirmation(item, actionEditor.action) &&
+      !actionEditor.confirmed
+    ) {
+      setActionEditor({
+        ...actionEditor,
+        error: `Confirm recording a ${actionEditor.action} result before the meeting starts.`,
+      })
+      return
+    }
+
+    const nextActingActionId = `${item.id}:${actionEditor.action}`
     setActingActionId(nextActingActionId)
 
     try {
-      if (item.source === 'checkout') {
-        await moderateCheckoutMutation.mutateAsync({
+      if (actionEditor.action === 'approve' || actionEditor.action === 'deny') {
+        if (item.source === 'checkout') {
+          await moderateCheckoutMutation.mutateAsync({
+            appointmentId: item.appointmentId,
+            decision: actionEditor.action === 'approve' ? 'accept' : 'reject',
+            reason: trimmedValue || undefined,
+          })
+        } else {
+          await moderateBookingMutation.mutateAsync({
+            reservationId: item.reservationId,
+            decision: actionEditor.action === 'approve' ? 'approve' : 'reject',
+            reason: trimmedValue || undefined,
+          })
+        }
+      } else if (actionEditor.action === 'pass' || actionEditor.action === 'fail') {
+        if (item.source !== 'checkout') return
+
+        await finalizeCheckoutMutation.mutateAsync({
           appointmentId: item.appointmentId,
-          decision: decision === 'approve' ? 'accept' : 'reject',
-          reason,
+          result: actionEditor.action,
+          notes: trimmedValue || undefined,
         })
       } else {
-        await moderateBookingMutation.mutateAsync({
-          reservationId: item.reservationId,
-          decision: decision === 'approve' ? 'approve' : 'reject',
-          reason,
+        if (item.source !== 'checkout') return
+
+        await cancelAcceptedCheckoutMutation.mutateAsync({
+          appointmentId: item.appointmentId,
+          reason: trimmedValue,
         })
       }
+
+      setActionEditor(null)
     } catch {
       // Error handling and rollback is managed in mutation callbacks.
     } finally {
       setActingActionId(null)
     }
   }
-
-  const handleFinalizeCheckoutAction = async (
-    item: Extract<AdminActionItem, { source: 'checkout' }>,
-    resultType: 'pass' | 'fail',
-  ) => {
-    const startTime = toDate(item.startTime)
-
-    if (startTime > new Date()) {
-      const confirmed = confirm(
-        `This meeting is scheduled for ${formatDateTime(
-          startTime,
-        )} and has not started yet. Record a ${resultType} result now?`,
-      )
-      if (!confirmed) return
-    }
-
-    const notes = prompt(
-      resultType === 'pass'
-        ? 'Optional notes for pass:'
-        : 'Optional notes for fail (member can retry later):',
-    )
-    if (notes === null) return
-
-    const nextActingActionId = `${item.id}:${resultType}`
-    setActingActionId(nextActingActionId)
-
-    try {
-      await finalizeCheckoutMutation.mutateAsync({
-        appointmentId: item.appointmentId,
-        result: resultType,
-        notes: notes.trim() || undefined,
-      })
-    } catch {
-      // Error handling and rollback is managed in mutation callbacks.
-    } finally {
-      setActingActionId(null)
-    }
-  }
-
-  const handleCancelAcceptedCheckoutAction = async (
-    item: Extract<AdminActionItem, { source: 'checkout' }>,
-  ) => {
-    const reason = prompt('Cancellation reason (required):')
-    if (reason === null || !reason.trim()) return
-
-    const nextActingActionId = `${item.id}:cancel`
-    setActingActionId(nextActingActionId)
-
-    try {
-      await cancelAcceptedCheckoutMutation.mutateAsync({
-        appointmentId: item.appointmentId,
-        reason: reason.trim(),
-      })
-    } catch {
-      // Error handling and rollback is managed in mutation callbacks.
-    } finally {
-      setActingActionId(null)
-    }
-  }
-
-  const reservationSummary = useMemo(() => {
-    const now = new Date()
-
-    const upcoming = reservations.filter(
-      (item) =>
-        ACTIVE_RESERVATION_STATUSES.includes(
-          item.status as (typeof ACTIVE_RESERVATION_STATUSES)[number],
-        ) && toDate(item.startTime) > now,
-    )
-
-    const pending = reservations.filter((item) => item.status === 'pending')
-    const approved = reservations.filter(
-      (item) => item.status === 'approved' || item.status === 'confirmed',
-    )
-    const completed = reservations.filter((item) => item.status === 'completed')
-    const cancelled = reservations.filter(
-      (item) => item.status === 'cancelled' || item.status === 'rejected',
-    )
-
-    return {
-      upcoming,
-      pending,
-      approved,
-      completed,
-      cancelled,
-    }
-  }, [reservations])
-
-  const timelineItems = useMemo(() => {
-    const reservationEvents: TimelineItem[] = reservationSummary.upcoming
-      .slice(0, 6)
-      .map((item) => ({
-        id: `reservation-${item.id}`,
-        title: item.machine.name,
-        subtitle: `Reservation (${item.status})`,
-        kind: 'reservation',
-        startsAt: item.startTime,
-      }))
-
-    const checkoutEvents: TimelineItem[] = upcomingCheckoutAppointments
-      .slice(0, 6)
-      .map((item) => ({
-        id: `checkout-${item.id}`,
-        title: item.machine.name,
-        subtitle:
-          user.role === 'member'
-            ? `Checkout with ${item.manager.name || item.manager.email}`
-            : `Checkout for ${item.user.name || item.user.email}`,
-        kind: 'checkout',
-        startsAt: item.startTime,
-      }))
-
-    return [...reservationEvents, ...checkoutEvents]
-      .sort(
-        (left, right) =>
-          toDate(left.startsAt).getTime() - toDate(right.startsAt).getTime(),
-      )
-      .slice(0, 10)
-  }, [reservationSummary.upcoming, upcomingCheckoutAppointments, user.role])
 
   const adminActionItems = useMemo(() => {
     if (!isAdmin) return []
@@ -1047,7 +732,6 @@ export function Dashboard({ user }: DashboardProps) {
         subtitle: 'Unread notification',
         description: item.message,
         kind: 'alert',
-        priority: 1,
         time: item.createdAt,
       }))
 
@@ -1060,49 +744,6 @@ export function Dashboard({ user }: DashboardProps) {
       })
       .slice(0, 14)
   }, [isAdmin, notifications])
-
-  const readyMachines = machines.filter(
-    (machine) => machine.eligibility.eligible,
-  )
-  const blockedMachines = machines.filter(
-    (machine) => !machine.eligibility.eligible,
-  )
-
-  const filteredQueueItems = queueItems.filter((item) => {
-    if (!searchQuery.trim()) return true
-    const query = searchQuery.trim().toLowerCase()
-
-    return (
-      item.title.toLowerCase().includes(query) ||
-      item.subtitle.toLowerCase().includes(query) ||
-      item.description.toLowerCase().includes(query)
-    )
-  })
-
-  const filteredAdminActionItems = adminActionItems.filter((item) => {
-    if (!searchQuery.trim()) return true
-    const query = searchQuery.trim().toLowerCase()
-
-    return (
-      item.machineName.toLowerCase().includes(query) ||
-      item.memberName.toLowerCase().includes(query) ||
-      item.memberEmail.toLowerCase().includes(query) ||
-      (item.source === 'checkout' &&
-        (item.managerName.toLowerCase().includes(query) ||
-          item.checkoutStatus.toLowerCase().includes(query) ||
-          (item.reviewerName || '').toLowerCase().includes(query)))
-    )
-  })
-
-  const filteredNotifications = notifications.filter((item) => {
-    if (!searchQuery.trim()) return true
-    const query = searchQuery.trim().toLowerCase()
-
-    return (
-      item.title.toLowerCase().includes(query) ||
-      item.message.toLowerCase().includes(query)
-    )
-  })
 
   if (loading) {
     return (
@@ -1130,16 +771,14 @@ export function Dashboard({ user }: DashboardProps) {
                 </CardDescription>
               </div>
               <Badge variant='warning'>
-                {isAdmin
-                  ? filteredAdminActionItems.length
-                  : filteredQueueItems.length}
+                {isAdmin ? adminActionItems.length : queueItems.length}
               </Badge>
             </div>
           </CardHeader>
           <CardContent className='space-y-3'>
             {isAdmin ? (
-              filteredAdminActionItems.length > 0 ? (
-                filteredAdminActionItems.map((item) => {
+              adminActionItems.length > 0 ? (
+                adminActionItems.map((item) => {
                   const approving = actingActionId === `${item.id}:approve`
                   const denying = actingActionId === `${item.id}:deny`
                   const passing = actingActionId === `${item.id}:pass`
@@ -1147,6 +786,20 @@ export function Dashboard({ user }: DashboardProps) {
                   const cancelling = actingActionId === `${item.id}:cancel`
                   const isAcceptedCheckout =
                     item.source === 'checkout' && item.checkoutStatus === 'accepted'
+                  const currentEditor =
+                    actionEditor?.itemId === item.id ? actionEditor : null
+                  const editorCopy = currentEditor
+                    ? getActionEditorCopy(item, currentEditor.action)
+                    : null
+                  const editorShowsInput = currentEditor
+                    ? actionShowsValueInput(currentEditor.action)
+                    : false
+                  const editorNeedsConfirmation = currentEditor
+                    ? actionNeedsEarlyConfirmation(item, currentEditor.action)
+                    : false
+                  const editorSubmitting = currentEditor
+                    ? actingActionId === `${item.id}:${currentEditor.action}`
+                    : false
 
                   return (
                     <article
@@ -1206,60 +859,141 @@ export function Dashboard({ user }: DashboardProps) {
                         </p>
                       </div>
 
-                      {isAcceptedCheckout ? (
-                        <div className='mt-3 grid grid-cols-3 gap-2 sm:max-w-md'>
-                          <Button
-                            size='sm'
-                            onClick={() => {
-                              void handleFinalizeCheckoutAction(item, 'pass')
-                            }}
-                            disabled={passing || failing || cancelling}
-                          >
-                            {passing ? 'Saving...' : 'Pass'}
-                          </Button>
-                          <Button
-                            size='sm'
-                            variant='destructive'
-                            onClick={() => {
-                              void handleFinalizeCheckoutAction(item, 'fail')
-                            }}
-                            disabled={passing || failing || cancelling}
-                          >
-                            {failing ? 'Saving...' : 'Fail'}
-                          </Button>
-                          <Button
-                            size='sm'
-                            variant='secondary'
-                            onClick={() => {
-                              void handleCancelAcceptedCheckoutAction(item)
-                            }}
-                            disabled={passing || failing || cancelling}
-                          >
-                            {cancelling ? 'Saving...' : 'Cancel'}
-                          </Button>
-                        </div>
+                      {currentEditor ? (
+                        <form
+                          className='mt-3 space-y-3 rounded-lg border border-border/80 bg-background/80 p-3'
+                          onSubmit={(event) => {
+                            event.preventDefault()
+                            void handleActionEditorSubmit(item)
+                          }}
+                        >
+                          <div className='space-y-1'>
+                            <p className='text-sm font-medium'>{editorCopy?.title}</p>
+                            <p className='text-xs text-muted-foreground'>
+                              {editorCopy?.description}
+                            </p>
+                          </div>
+
+                          {editorShowsInput && editorCopy?.inputLabel && (
+                            <div className='space-y-2'>
+                              <Label htmlFor={`${item.id}-${currentEditor.action}-value`}>
+                                {editorCopy.inputLabel}
+                              </Label>
+                              <Input
+                                id={`${item.id}-${currentEditor.action}-value`}
+                                value={currentEditor.value}
+                                placeholder={editorCopy.inputPlaceholder}
+                                disabled={editorSubmitting}
+                                onChange={(event) => {
+                                  setActionEditor({
+                                    ...currentEditor,
+                                    value: event.target.value,
+                                    error: null,
+                                  })
+                                }}
+                              />
+                            </div>
+                          )}
+
+                          {editorNeedsConfirmation && (
+                            <label
+                              className='flex items-start gap-2 text-xs text-muted-foreground'
+                              htmlFor={`${item.id}-${currentEditor.action}-confirm`}
+                            >
+                              <input
+                                id={`${item.id}-${currentEditor.action}-confirm`}
+                                type='checkbox'
+                                checked={currentEditor.confirmed}
+                                disabled={editorSubmitting}
+                                onChange={(event) => {
+                                  setActionEditor({
+                                    ...currentEditor,
+                                    confirmed: event.target.checked,
+                                    error: null,
+                                  })
+                                }}
+                              />
+                              <span>
+                                This meeting starts {formatDateTime(item.startTime)}.
+                                Confirm that you want to record a{' '}
+                                {currentEditor.action} result before it begins.
+                              </span>
+                            </label>
+                          )}
+
+                          {currentEditor.error && (
+                            <Alert variant='destructive' className='py-3'>
+                              <AlertDescription>
+                                {currentEditor.error}
+                              </AlertDescription>
+                            </Alert>
+                          )}
+
+                          <div className='flex flex-wrap gap-2'>
+                            <Button size='sm' type='submit' disabled={editorSubmitting}>
+                              {editorSubmitting
+                                ? 'Saving...'
+                                : (editorCopy?.submitLabel ?? 'Save')}
+                            </Button>
+                            <Button
+                              size='sm'
+                              type='button'
+                              variant='secondary'
+                              disabled={editorSubmitting}
+                              onClick={() => setActionEditor(null)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                        </form>
                       ) : (
-                        <div className='mt-3 grid grid-cols-2 gap-2 sm:max-w-xs'>
-                          <Button
-                            size='sm'
-                            onClick={() => {
-                              void handleModerateAction(item, 'approve')
-                            }}
-                            disabled={approving || denying}
-                          >
-                            {approving ? 'Approving...' : 'Approve'}
-                          </Button>
-                          <Button
-                            size='sm'
-                            variant='destructive'
-                            onClick={() => {
-                              void handleModerateAction(item, 'deny')
-                            }}
-                            disabled={approving || denying}
-                          >
-                            {denying ? 'Denying...' : 'Deny'}
-                          </Button>
-                        </div>
+                        <>
+                          {isAcceptedCheckout ? (
+                            <div className='mt-3 grid grid-cols-3 gap-2 sm:max-w-md'>
+                              <Button
+                                size='sm'
+                                onClick={() => openActionEditor(item, 'pass')}
+                                disabled={passing || failing || cancelling}
+                              >
+                                {passing ? 'Saving...' : 'Pass'}
+                              </Button>
+                              <Button
+                                size='sm'
+                                variant='destructive'
+                                onClick={() => openActionEditor(item, 'fail')}
+                                disabled={passing || failing || cancelling}
+                              >
+                                {failing ? 'Saving...' : 'Fail'}
+                              </Button>
+                              <Button
+                                size='sm'
+                                variant='secondary'
+                                onClick={() => openActionEditor(item, 'cancel')}
+                                disabled={passing || failing || cancelling}
+                              >
+                                {cancelling ? 'Saving...' : 'Cancel'}
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className='mt-3 grid grid-cols-2 gap-2 sm:max-w-xs'>
+                              <Button
+                                size='sm'
+                                onClick={() => openActionEditor(item, 'approve')}
+                                disabled={approving || denying}
+                              >
+                                {approving ? 'Approving...' : 'Approve'}
+                              </Button>
+                              <Button
+                                size='sm'
+                                variant='destructive'
+                                onClick={() => openActionEditor(item, 'deny')}
+                                disabled={approving || denying}
+                              >
+                                {denying ? 'Denying...' : 'Deny'}
+                              </Button>
+                            </div>
+                          )}
+                        </>
                       )}
                     </article>
                   )
@@ -1269,8 +1003,8 @@ export function Dashboard({ user }: DashboardProps) {
                   No actionable booking or checkout items.
                 </p>
               )
-            ) : filteredQueueItems.length > 0 ? (
-              filteredQueueItems.map((item) => (
+            ) : queueItems.length > 0 ? (
+              queueItems.map((item) => (
                 <div
                   key={item.id}
                   className={cn(
@@ -1315,7 +1049,7 @@ export function Dashboard({ user }: DashboardProps) {
               ))
             ) : (
               <p className='text-sm text-muted-foreground'>
-                No queue items match your search.
+                No unread operational alerts.
               </p>
             )}
           </CardContent>
