@@ -1,15 +1,52 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => {
+  const updateWhere = vi.fn().mockResolvedValue(undefined)
+  const updateSet = vi.fn(() => ({ where: updateWhere }))
+  const insertValues = vi.fn().mockResolvedValue(undefined)
+
+  return {
+    db: {
+      query: {
+        trainingModules: { findFirst: vi.fn(), findMany: vi.fn() },
+        trainingProgress: { findFirst: vi.fn(), findMany: vi.fn() },
+      },
+      update: vi.fn(() => ({ set: updateSet })),
+      insert: vi.fn(() => ({ values: insertValues })),
+    },
+    trainingProgress: {
+      id: 'training_progress.id',
+      userId: 'training_progress.user_id',
+      moduleId: 'training_progress.module_id',
+    },
+    trainingModules: {
+      id: 'training_modules.id',
+      active: 'training_modules.active',
+    },
+    updateSet,
+    updateWhere,
+    insertValues,
+  }
+})
+
+vi.mock('drizzle-orm', () => ({
+  and: vi.fn((...args: unknown[]) => ({ kind: 'and', args })),
+  eq: vi.fn((...args: unknown[]) => ({ kind: 'eq', args })),
+}))
 
 vi.mock('~/lib/db', () => ({
-  db: {},
-  trainingProgress: {},
-  trainingModules: {},
+  db: mocks.db,
+  trainingProgress: mocks.trainingProgress,
+  trainingModules: mocks.trainingModules,
 }))
 
 import { getWatchedRangeSeconds } from '~/lib/watch-ranges'
 import {
+  getAllModulesWithProgress,
+  getModuleProgress,
   mergeProgressRanges,
   shouldSnapEndedProgressToFullDuration,
+  updateTrainingProgress,
   validateProgressUpdate,
   type ProgressUpdate,
 } from './training'
@@ -24,6 +61,14 @@ function makeUpdate(overrides: Partial<ProgressUpdate> = {}): ProgressUpdate {
     ...overrides,
   }
 }
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mocks.db.query.trainingModules.findFirst.mockResolvedValue(null)
+  mocks.db.query.trainingModules.findMany.mockResolvedValue([])
+  mocks.db.query.trainingProgress.findFirst.mockResolvedValue(null)
+  mocks.db.query.trainingProgress.findMany.mockResolvedValue([])
+})
 
 describe('validateProgressUpdate', () => {
   it('rejects when watched seconds exceed video duration', () => {
@@ -223,5 +268,230 @@ describe('shouldSnapEndedProgressToFullDuration', () => {
     )
 
     expect(shouldSnap).toBe(false)
+  })
+})
+
+describe('updateTrainingProgress', () => {
+  it('validates against pre-snap progress and still persists snapped completion', async () => {
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: '00000000-0000-0000-0000-000000000001',
+      active: true,
+      durationSeconds: 100,
+    })
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      id: 'progress-1',
+      watchedSeconds: 94,
+      watchedRanges: [{ start: 0, end: 94 }],
+      completedAt: null,
+    })
+
+    const result = await updateTrainingProgress(
+      'user-1',
+      makeUpdate({
+        watchedRanges: [{ start: 99, end: 100 }],
+        currentPosition: 99,
+        sessionDuration: 1,
+        ended: true,
+      })
+    )
+
+    expect(result).toEqual({
+      success: true,
+      watchedSeconds: 100,
+      percentComplete: 100,
+    })
+    expect(mocks.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        watchedSeconds: 100,
+        watchedRanges: [{ start: 0, end: 100 }],
+        lastPosition: 100,
+        completedAt: expect.any(Date),
+        updatedAt: expect.any(Date),
+      })
+    )
+    expect(mocks.db.update).toHaveBeenCalledWith(mocks.trainingProgress)
+    // Avoid asserting updateWhere call counts here: a videoDuration correction
+    // adds a separate trainingModules update before the trainingProgress update.
+    expect(mocks.insertValues).not.toHaveBeenCalled()
+  })
+
+  it('inserts a new progress record when no existing row is found', async () => {
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: '00000000-0000-0000-0000-000000000001',
+      active: true,
+      durationSeconds: 100,
+    })
+
+    const result = await updateTrainingProgress(
+      'user-1',
+      makeUpdate({
+        watchedRanges: [{ start: 0, end: 60 }],
+        currentPosition: 60,
+        sessionDuration: 30,
+      })
+    )
+
+    expect(result).toEqual({
+      success: true,
+      watchedSeconds: 60,
+      percentComplete: 60,
+    })
+    expect(mocks.insertValues).toHaveBeenCalledWith({
+      userId: 'user-1',
+      moduleId: '00000000-0000-0000-0000-000000000001',
+      watchedSeconds: 60,
+      watchedRanges: [{ start: 0, end: 60 }],
+      lastPosition: 60,
+      completedAt: undefined,
+    })
+    expect(mocks.updateSet).not.toHaveBeenCalled()
+    expect(mocks.updateWhere).not.toHaveBeenCalled()
+  })
+})
+
+describe('getModuleProgress', () => {
+  it('derives watched seconds and percent complete from normalized ranges', async () => {
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      watchedSeconds: 20,
+      watchedRanges: [{ start: 0, end: 60 }],
+      lastPosition: 42,
+      completedAt: null,
+    })
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: 'module-1',
+      title: 'Safety Fundamentals',
+      durationSeconds: 100,
+    })
+
+    const result = await getModuleProgress('user-1', 'module-1')
+
+    expect(result).toEqual({
+      moduleId: 'module-1',
+      moduleTitle: 'Safety Fundamentals',
+      durationSeconds: 100,
+      watchedSeconds: 60,
+      watchedRanges: [{ start: 0, end: 60 }],
+      lastPosition: 42,
+      completedAt: null,
+      percentComplete: 60,
+    })
+  })
+
+  it('caps normalized over-long stored ranges at 100 percent', async () => {
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      watchedSeconds: 20,
+      watchedRanges: [{ start: 0, end: 150 }],
+      lastPosition: 42,
+      completedAt: null,
+    })
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: 'module-1',
+      title: 'Safety Fundamentals',
+      durationSeconds: 100,
+    })
+
+    const result = await getModuleProgress('user-1', 'module-1')
+
+    expect(result).toEqual({
+      moduleId: 'module-1',
+      moduleTitle: 'Safety Fundamentals',
+      durationSeconds: 100,
+      watchedSeconds: 100,
+      watchedRanges: [{ start: 0, end: 100 }],
+      lastPosition: 42,
+      completedAt: null,
+      percentComplete: 100,
+    })
+  })
+})
+
+describe('getAllModulesWithProgress', () => {
+  it('returns watched seconds and percent complete from range-derived progress', async () => {
+    mocks.db.query.trainingModules.findMany.mockResolvedValue([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+      },
+      {
+        id: 'module-2',
+        title: 'Laser Safety',
+        durationSeconds: 80,
+        active: true,
+      },
+    ])
+    mocks.db.query.trainingProgress.findMany.mockResolvedValue([
+      {
+        moduleId: 'module-1',
+        watchedSeconds: 10,
+        watchedRanges: [{ start: 0, end: 95 }],
+        lastPosition: 95,
+        completedAt: null,
+      },
+    ])
+
+    const result = await getAllModulesWithProgress('user-1')
+
+    expect(result).toEqual([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+        watchedSeconds: 95,
+        watchedRanges: [{ start: 0, end: 95 }],
+        lastPosition: 95,
+        completedAt: null,
+        percentComplete: 95,
+      },
+      {
+        id: 'module-2',
+        title: 'Laser Safety',
+        durationSeconds: 80,
+        active: true,
+        watchedSeconds: 0,
+        watchedRanges: [],
+        lastPosition: 0,
+        completedAt: undefined,
+        percentComplete: 0,
+      },
+    ])
+  })
+
+  it('caps normalized over-long stored ranges at 100 percent', async () => {
+    mocks.db.query.trainingModules.findMany.mockResolvedValue([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+      },
+    ])
+    mocks.db.query.trainingProgress.findMany.mockResolvedValue([
+      {
+        moduleId: 'module-1',
+        watchedSeconds: 10,
+        watchedRanges: [{ start: 0, end: 150 }],
+        lastPosition: 95,
+        completedAt: null,
+      },
+    ])
+
+    const result = await getAllModulesWithProgress('user-1')
+
+    expect(result).toEqual([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+        watchedSeconds: 100,
+        watchedRanges: [{ start: 0, end: 100 }],
+        lastPosition: 95,
+        completedAt: null,
+        percentComplete: 100,
+      },
+    ])
   })
 })

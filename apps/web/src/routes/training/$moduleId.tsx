@@ -2,7 +2,11 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useRef, useState } from 'react'
-import type { WatchedRange } from '~/lib/watch-ranges'
+import {
+  getWatchedRangeSeconds,
+  normalizeWatchedRanges,
+  type WatchedRange,
+} from '~/lib/watch-ranges'
 import { requireAuth } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
 import { normalizeYouTubeId } from '~/lib/youtube'
@@ -67,9 +71,24 @@ function TrainingModulePage() {
     ended: boolean
   } | null>(null)
 
+  const getNormalizedWatchedSeconds = useCallback(
+    (watchedSeconds: number, watchedRanges: WatchedRange[], videoDuration: number) => {
+      const effectiveDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
+
+      if (watchedRanges.length === 0 || effectiveDuration <= 0) {
+        return watchedSeconds
+      }
+
+      return Math.floor(
+        getWatchedRangeSeconds(normalizeWatchedRanges(watchedRanges, effectiveDuration))
+      )
+    },
+    [module.durationSeconds]
+  )
+
   const saveProgress = useCallback(
     async (
-      watchedSeconds: number,
+      normalizedWatchedSeconds: number,
       watchedRanges: WatchedRange[],
       currentPosition: number,
       sessionDuration: number,
@@ -80,14 +99,17 @@ function TrainingModulePage() {
       setSaving(true)
 
       const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
-      const localPercent = Math.min(Math.floor((watchedSeconds / displayDuration) * 100), 100)
+      const localPercent = Math.min(
+        Math.floor((normalizedWatchedSeconds / displayDuration) * 100),
+        100
+      )
       setCurrentProgress(localPercent)
 
       try {
         const result = await updateProgress({
           data: {
             moduleId: module.id,
-            watchedSeconds,
+            watchedSeconds: normalizedWatchedSeconds,
             watchedRanges,
             currentPosition,
             sessionDuration,
@@ -140,11 +162,16 @@ function TrainingModulePage() {
       videoDuration: number
       ended: boolean
     }) => {
+      const normalizedWatchedSeconds = getNormalizedWatchedSeconds(
+        watchedSeconds,
+        watchedRanges,
+        videoDuration
+      )
       if (savingRef.current) {
         const pending = pendingRef.current
         pendingRef.current = pending
           ? {
-              watchedSeconds: Math.max(pending.watchedSeconds, watchedSeconds),
+              watchedSeconds: normalizedWatchedSeconds,
               watchedRanges,
               currentPosition,
               sessionDuration: Math.min(300, pending.sessionDuration + sessionDuration),
@@ -152,7 +179,7 @@ function TrainingModulePage() {
               ended: pending.ended || ended,
             }
           : {
-              watchedSeconds,
+              watchedSeconds: normalizedWatchedSeconds,
               watchedRanges,
               currentPosition,
               sessionDuration,
@@ -162,7 +189,7 @@ function TrainingModulePage() {
         return
       }
       await saveProgress(
-        watchedSeconds,
+        normalizedWatchedSeconds,
         watchedRanges,
         currentPosition,
         sessionDuration,
@@ -170,7 +197,7 @@ function TrainingModulePage() {
         ended
       )
     },
-    [saveProgress]
+    [getNormalizedWatchedSeconds, saveProgress]
   )
 
   return (

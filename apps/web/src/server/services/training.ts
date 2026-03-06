@@ -208,12 +208,12 @@ export async function updateTrainingProgress(
     ? [{ start: 0, end: effectiveDuration }]
     : mergedRanges
   const existingWatchedRangeSeconds = getWatchedRangeSeconds(existingRanges)
-  const mergedWatchedRangeSeconds = getWatchedRangeSeconds(finalizedRanges)
+  const preSnapWatchedRangeSeconds = getWatchedRangeSeconds(mergedRanges)
 
   // Validate the update
   const validation = validateProgressUpdate(
     existingWatchedRangeSeconds,
-    mergedWatchedRangeSeconds,
+    preSnapWatchedRangeSeconds,
     update,
     effectiveDuration
   )
@@ -223,8 +223,9 @@ export async function updateTrainingProgress(
   }
 
   // Cap watched seconds at the effective duration (fixes inflated values from old bugs)
+  const finalizedWatchedRangeSeconds = getWatchedRangeSeconds(finalizedRanges)
   const savedWatchedSeconds = Math.min(
-    Math.floor(mergedWatchedRangeSeconds),
+    Math.floor(finalizedWatchedRangeSeconds),
     effectiveDuration
   )
   const savedLastPosition = Math.min(
@@ -286,20 +287,23 @@ export async function getModuleProgress(userId: string, moduleId: string) {
     return null
   }
 
+  const watchedRanges = getStoredRanges(
+    progress?.watchedRanges,
+    progress?.watchedSeconds || 0,
+    module.durationSeconds
+  )
+  const watchedRangeSeconds = getWatchedRangeSeconds(watchedRanges)
+
   return {
     moduleId,
     moduleTitle: module.title,
     durationSeconds: module.durationSeconds,
-    watchedSeconds: progress?.watchedSeconds || 0,
-    watchedRanges: getStoredRanges(
-      progress?.watchedRanges,
-      progress?.watchedSeconds || 0,
-      module.durationSeconds
-    ),
+    watchedSeconds: Math.floor(watchedRangeSeconds),
+    watchedRanges,
     lastPosition: progress?.lastPosition || 0,
     completedAt: progress?.completedAt,
     percentComplete: module.durationSeconds > 0
-      ? Math.floor(((progress?.watchedSeconds || 0) / module.durationSeconds) * 100)
+      ? Math.min(Math.floor((watchedRangeSeconds / module.durationSeconds) * 100), 100)
       : 0,
   }
 }
@@ -324,14 +328,15 @@ export async function getAllModulesWithProgress(userId: string) {
       progress?.watchedSeconds || 0,
       module.durationSeconds
     )
+    const watchedRangeSeconds = getWatchedRangeSeconds(watchedRanges)
     return {
       ...module,
-      watchedSeconds: progress?.watchedSeconds || 0,
+      watchedSeconds: Math.floor(watchedRangeSeconds),
       watchedRanges,
       lastPosition: progress?.lastPosition || 0,
       completedAt: progress?.completedAt,
       percentComplete: module.durationSeconds > 0
-        ? Math.floor(((progress?.watchedSeconds || 0) / module.durationSeconds) * 100)
+        ? Math.min(Math.floor((watchedRangeSeconds / module.durationSeconds) * 100), 100)
         : 0,
     }
   })
