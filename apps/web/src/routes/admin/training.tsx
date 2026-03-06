@@ -1,10 +1,13 @@
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
 import { Plus, Search, Video } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { requireAdmin } from '~/server/auth/middleware'
 import { db, trainingModules } from '~/lib/db'
+import { queryKeys } from '~/lib/query/keys'
 import { createTrainingModule, updateTrainingModule } from '~/server/api/admin'
 import { YouTubePreview } from '~/components/YouTubePreview'
 import { formatDuration, normalizeYouTubeId } from '~/lib/youtube'
@@ -32,16 +35,23 @@ const getAdminTrainingData = createServerFn({ method: 'GET' }).handler(async () 
   return { modules: moduleList }
 })
 
+type AdminTrainingData = Awaited<ReturnType<typeof getAdminTrainingData>>
+type TrainingModuleListItem = AdminTrainingData['modules'][number]
+
+const adminTrainingDataQueryOptions = queryOptions({
+  queryKey: queryKeys.admin.trainingModules(),
+  queryFn: () => getAdminTrainingData(),
+})
+
 export const Route = createFileRoute('/admin/training')({
   component: AdminTrainingPage,
-  loader: async () => {
-    return await getAdminTrainingData()
-  },
 })
 
 function AdminTrainingPage() {
-  const { modules: initialModules } = Route.useLoaderData()
-  const [moduleList, setModuleList] = useState(initialModules)
+  const queryClient = useQueryClient()
+  const adminTrainingQuery = useQuery(adminTrainingDataQueryOptions)
+  const [moduleList, setModuleList] = useState<TrainingModuleListItem[]>([])
+  const [modulesInitialized, setModulesInitialized] = useState(false)
   const [moduleQuery, setModuleQuery] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -65,6 +75,13 @@ function AdminTrainingPage() {
   const [editAutoDuration, setEditAutoDuration] = useState<number | null>(null)
   const [editDurationOverride, setEditDurationOverride] = useState(false)
   const [editDurationMinutes, setEditDurationMinutes] = useState('')
+
+  useEffect(() => {
+    if (!adminTrainingQuery.data?.modules) return
+    if (modulesInitialized) return
+    setModuleList(adminTrainingQuery.data.modules)
+    setModulesInitialized(true)
+  }, [adminTrainingQuery.data?.modules, modulesInitialized])
 
   const newVideoId = useMemo(
     () => normalizeYouTubeId(newVideoInput),
@@ -137,6 +154,9 @@ function AdminTrainingPage() {
 
   const sortModules = (modules: typeof moduleList) =>
     [...modules].sort((a, b) => a.title.localeCompare(b.title))
+
+  const refreshTrainingModules = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.admin.trainingModules() })
 
   const getDurationSeconds = (
     autoSeconds: number | null,
@@ -217,6 +237,7 @@ function AdminTrainingPage() {
       setCreateError('Failed to create module')
     } finally {
       setSaving(false)
+      void refreshTrainingModules()
     }
   }
 
@@ -307,22 +328,51 @@ function AdminTrainingPage() {
       setEditError('Failed to update module')
     } finally {
       setSaving(false)
+      void refreshTrainingModules()
     }
   }
 
-  const handleToggleActive = async (moduleId: string, active: boolean) => {
-    try {
+  const toggleModuleActiveMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to update module',
+    },
+    mutationFn: async (variables: { moduleId: string; active: boolean }) => {
       const result = await updateTrainingModule({
-        data: { moduleId, active },
+        data: { moduleId: variables.moduleId, active: variables.active },
       })
 
-      if (result.success) {
-        setModuleList((prev) =>
-          prev.map((m) => (m.id === moduleId ? { ...m, active } : m))
-        )
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to update module')
       }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      const previousModules = moduleList
+      setModuleList((prev) =>
+        prev.map((module) =>
+          module.id === variables.moduleId
+            ? { ...module, active: variables.active }
+            : module
+        )
+      )
+      return { previousModules }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousModules) {
+        setModuleList(context.previousModules)
+      }
+    },
+    onSettled: () => {
+      void refreshTrainingModules()
+    },
+  })
+
+  const handleToggleActive = async (moduleId: string, active: boolean) => {
+    try {
+      await toggleModuleActiveMutation.mutateAsync({ moduleId, active })
     } catch {
-      alert('Failed to update module')
+      // Error handling and rollback is managed in mutation callbacks.
     }
   }
 
@@ -377,6 +427,21 @@ function AdminTrainingPage() {
 
   const textareaClassName =
     'w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+
+  if (adminTrainingQuery.isPending && typeof adminTrainingQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading training administration..." />
+  }
+
+  if (adminTrainingQuery.isError && typeof adminTrainingQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load training administration data."
+        onRetry={() => {
+          void adminTrainingQuery.refetch()
+        }}
+      />
+    )
+  }
 
   return (
     <div className="min-h-screen">

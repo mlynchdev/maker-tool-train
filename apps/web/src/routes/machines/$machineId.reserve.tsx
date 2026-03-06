@@ -1,18 +1,26 @@
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useMemo, useState } from 'react'
-import { requireAuth } from '~/server/auth/middleware'
-import { db, machines } from '~/lib/db'
-import { checkEligibility } from '~/server/services/eligibility'
-import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
-import { reserveMachine } from '~/server/api/machines'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
 import { Label } from '~/components/ui/label'
+import { db, machines } from '~/lib/db'
+import { queryKeys } from '~/lib/query/keys'
+import { reserveMachine } from '~/server/api/machines'
+import { requireAuth } from '~/server/auth/middleware'
+import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
+import { checkEligibility } from '~/server/services/eligibility'
 
 function formatDateTimeLocal(date: Date) {
   const year = date.getFullYear()
@@ -58,17 +66,24 @@ const getReserveData = createServerFn({ method: 'GET' })
     return { machine, bookings, eligibility }
   })
 
+type MachineReserveData = Awaited<ReturnType<typeof getReserveData>>
+
+const machineReserveDataQueryOptions = (machineId: string) =>
+  queryOptions({
+    queryKey: queryKeys.machines.reserve(machineId),
+    queryFn: () => getReserveData({ data: { machineId } }),
+  })
+
 export const Route = createFileRoute('/machines/$machineId/reserve')({
   component: ReserveMachinePage,
-  loader: async ({ params }) => {
-    return await getReserveData({ data: { machineId: params.machineId } })
-  },
 })
 
 function ReserveMachinePage() {
-  const { machine, bookings, eligibility } = Route.useLoaderData()
+  const { machineId } = Route.useParams()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [loading, setLoading] = useState(false)
+  const machineReserveQuery = useQuery(machineReserveDataQueryOptions(machineId))
+
   const [error, setError] = useState('')
 
   const defaultRange = useMemo(() => {
@@ -86,6 +101,66 @@ function ReserveMachinePage() {
   const [startTime, setStartTime] = useState(defaultRange.start)
   const [endTime, setEndTime] = useState(defaultRange.end)
 
+  const reserveMutation = useMutation({
+    meta: {
+      suppressToast: true,
+    },
+    mutationFn: async (variables: {
+      machineId: string
+      startTimeIso: string
+      endTimeIso: string
+    }) => {
+      const result = await reserveMachine({
+        data: {
+          machineId: variables.machineId,
+          startTime: variables.startTimeIso,
+          endTime: variables.endTimeIso,
+        },
+      })
+
+      if (!result.success) {
+        const reasonText =
+          result.reasons && result.reasons.length > 0
+            ? ` (${result.reasons.join('; ')})`
+            : ''
+        throw new Error((result.error || 'Failed to create reservation request') + reasonText)
+      }
+
+      return result
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.reservations.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.machines.detail(machineId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.machines.reserve(machineId) }),
+      ])
+      navigate({ to: '/reservations' })
+    },
+  })
+
+  if (machineReserveQuery.isPending && typeof machineReserveQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading reservation request form..." />
+  }
+
+  if (machineReserveQuery.isError && typeof machineReserveQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load reservation request form."
+        onRetry={() => {
+          void machineReserveQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const machine = machineReserveQuery.data?.machine
+  const bookings = machineReserveQuery.data?.bookings ?? []
+  const eligibility = machineReserveQuery.data?.eligibility
+
+  if (!machine || !eligibility) {
+    return <QueryErrorScreen message="Machine reservation data is unavailable." />
+  }
+
   const handleReserve = async () => {
     const start = new Date(startTime)
     const end = new Date(endTime)
@@ -100,31 +175,20 @@ function ReserveMachinePage() {
       return
     }
 
-    setLoading(true)
     setError('')
 
     try {
-      const result = await reserveMachine({
-        data: {
-          machineId: machine.id,
-          startTime: start.toISOString(),
-          endTime: end.toISOString(),
-        },
+      await reserveMutation.mutateAsync({
+        machineId: machine.id,
+        startTimeIso: start.toISOString(),
+        endTimeIso: end.toISOString(),
       })
-
-      if (result.success) {
-        navigate({ to: '/reservations' })
+    } catch (caughtError) {
+      if (caughtError instanceof Error && caughtError.message) {
+        setError(caughtError.message)
       } else {
-        const reasonText =
-          result.reasons && result.reasons.length > 0
-            ? ` (${result.reasons.join('; ')})`
-            : ''
-        setError((result.error || 'Failed to create reservation request') + reasonText)
+        setError('An error occurred. Please try again.')
       }
-    } catch {
-      setError('An error occurred. Please try again.')
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -153,12 +217,12 @@ function ReserveMachinePage() {
           </p>
         </section>
 
-        {error && (
+        {error ? (
           <Alert variant="destructive">
             <AlertTitle>Reservation request failed</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
-        )}
+        ) : null}
 
         <Card>
           <CardHeader>
@@ -191,8 +255,8 @@ function ReserveMachinePage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <Button onClick={handleReserve} disabled={loading}>
-                    {loading ? 'Submitting...' : 'Submit request'}
+                  <Button onClick={handleReserve} disabled={reserveMutation.isPending}>
+                    {reserveMutation.isPending ? 'Submitting...' : 'Submit request'}
                   </Button>
                   <Button asChild variant="outline">
                     <Link to="/machines/$machineId" params={{ machineId: machine.id }}>
@@ -207,8 +271,8 @@ function ReserveMachinePage() {
                 <AlertDescription>
                   <p className="mb-2">Complete these requirements before requesting time:</p>
                   <ul className="list-disc space-y-1 pl-4">
-                    {eligibility.reasons.map((reason, idx) => (
-                      <li key={idx}>{reason}</li>
+                    {eligibility.reasons.map((reason, index) => (
+                      <li key={index}>{reason}</li>
                     ))}
                   </ul>
                 </AlertDescription>

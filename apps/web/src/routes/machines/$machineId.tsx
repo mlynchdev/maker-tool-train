@@ -1,18 +1,26 @@
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { Outlet, createFileRoute, Link, useChildMatches } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useState } from 'react'
-import { requireAuth } from '~/server/auth/middleware'
-import { db, machines } from '~/lib/db'
-import { checkEligibility, getMachineRequirements } from '~/server/services/eligibility'
-import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
-import { getAvailableCheckoutSlots } from '~/server/services/checkout-scheduling'
-import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
-import { requestCheckoutAppointment } from '~/server/api/machines'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
+import { db, machines } from '~/lib/db'
+import { queryKeys } from '~/lib/query/keys'
+import { requestCheckoutAppointment } from '~/server/api/machines'
+import { requireAuth } from '~/server/auth/middleware'
+import { getMachineBookingsInRange } from '~/server/services/booking-conflicts'
+import { getAvailableCheckoutSlots } from '~/server/services/checkout-scheduling'
+import { checkEligibility, getMachineRequirements } from '~/server/services/eligibility'
+import { getMakerspaceTimezone } from '~/server/services/makerspace-settings'
 
 const getMachineData = createServerFn({ method: 'GET' })
   .inputValidator((data: { machineId: string }) => data)
@@ -29,7 +37,7 @@ const getMachineData = createServerFn({ method: 'GET' })
 
     const eligibility = await checkEligibility(user.id, data.machineId)
     const requirements = await getMachineRequirements(data.machineId)
-    const trainingComplete = eligibility.requirements.every((req) => req.completed)
+    const trainingComplete = eligibility.requirements.every((requirement) => requirement.completed)
 
     const rangeStart = new Date()
     const rangeEnd = new Date(rangeStart)
@@ -64,30 +72,113 @@ const getMachineData = createServerFn({ method: 'GET' })
     }
   })
 
+type MachineDetailData = Awaited<ReturnType<typeof getMachineData>>
+
+const machineDetailDataQueryOptions = (machineId: string) =>
+  queryOptions({
+    queryKey: queryKeys.machines.detail(machineId),
+    queryFn: () => getMachineData({ data: { machineId } }),
+  })
+
 export const Route = createFileRoute('/machines/$machineId')({
   component: MachineDetailPage,
-  loader: async ({ params }) => {
-    return await getMachineData({ data: { machineId: params.machineId } })
-  },
 })
 
 function MachineDetailPage() {
-  const {
-    machine,
-    makerspaceTimezone,
-    eligibility,
-    requirements,
-    trainingComplete,
-    availableCheckoutSlots,
-    upcomingBookings,
-  } = Route.useLoaderData()
+  const { machineId } = Route.useParams()
   const childMatches = useChildMatches()
-  const [checkoutSlots, setCheckoutSlots] = useState(availableCheckoutSlots)
+  const queryClient = useQueryClient()
+  const machineDetailQuery = useQuery({
+    ...machineDetailDataQueryOptions(machineId),
+    enabled: childMatches.length === 0,
+  })
+
   const [bookingSlotKey, setBookingSlotKey] = useState<string | null>(null)
   const [checkoutMessage, setCheckoutMessage] = useState('')
 
+  const requestCheckoutMutation = useMutation({
+    meta: {
+      errorMessage: 'Unable to submit checkout request',
+    },
+    mutationFn: async (variables: {
+      machineId: string
+      managerId: string
+      slotStartTimeIso: string
+    }) => {
+      const result = await requestCheckoutAppointment({
+        data: {
+          machineId: variables.machineId,
+          managerId: variables.managerId,
+          slotStartTime: variables.slotStartTimeIso,
+        },
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Unable to submit checkout request')
+      }
+
+      return result
+    },
+    onSuccess: (_result, variables) => {
+      setCheckoutMessage('Checkout request submitted. Status: pending admin review.')
+
+      queryClient.setQueryData<MachineDetailData>(
+        queryKeys.machines.detail(variables.machineId),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            availableCheckoutSlots: current.availableCheckoutSlots.filter(
+              (slot) =>
+                !(
+                  slot.managerId === variables.managerId &&
+                  new Date(slot.startTime).toISOString() === variables.slotStartTimeIso
+                )
+            ),
+          }
+        }
+      )
+    },
+    onError: () => {
+      setCheckoutMessage('Unable to submit checkout request')
+    },
+    onSettled: (_result, _error, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.machines.detail(variables.machineId),
+      })
+    },
+  })
+
   if (childMatches.length > 0) {
     return <Outlet />
+  }
+
+  if (machineDetailQuery.isPending && typeof machineDetailQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading machine details..." />
+  }
+
+  if (machineDetailQuery.isError && typeof machineDetailQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load machine details."
+        onRetry={() => {
+          void machineDetailQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const machine = machineDetailQuery.data?.machine
+  const makerspaceTimezone = machineDetailQuery.data?.makerspaceTimezone ?? 'UTC'
+  const eligibility = machineDetailQuery.data?.eligibility
+  const requirements = machineDetailQuery.data?.requirements ?? []
+  const trainingComplete = machineDetailQuery.data?.trainingComplete ?? false
+  const checkoutSlots = machineDetailQuery.data?.availableCheckoutSlots ?? []
+  const upcomingBookings = machineDetailQuery.data?.upcomingBookings ?? []
+
+  if (!machine || !eligibility) {
+    return <QueryErrorScreen message="Machine details are unavailable." />
   }
 
   const formatDateTime = (value: Date) =>
@@ -122,37 +213,19 @@ function MachineDetailPage() {
       : eligibility.reasons
 
   const handleBookCheckout = async (managerId: string, slotStartTime: Date) => {
-    const slotKey = `${managerId}-${slotStartTime.toISOString()}`
+    const slotStartTimeIso = slotStartTime.toISOString()
+    const slotKey = `${managerId}-${slotStartTimeIso}`
     setBookingSlotKey(slotKey)
     setCheckoutMessage('')
 
     try {
-      const result = await requestCheckoutAppointment({
-        data: {
-          machineId: machine.id,
-          managerId,
-          slotStartTime: slotStartTime.toISOString(),
-        },
+      await requestCheckoutMutation.mutateAsync({
+        machineId: machine.id,
+        managerId,
+        slotStartTimeIso,
       })
-
-      if (result.success) {
-        setCheckoutMessage(
-          'Checkout request submitted. Status: pending admin review.'
-        )
-        setCheckoutSlots((prev) =>
-          prev.filter(
-            (slot) =>
-              !(
-                slot.managerId === managerId &&
-                new Date(slot.startTime).getTime() === slotStartTime.getTime()
-              )
-          )
-        )
-      } else {
-        setCheckoutMessage(result.error || 'Unable to submit checkout request')
-      }
     } catch {
-      setCheckoutMessage('Unable to submit checkout request')
+      // Error handling is managed in mutation callbacks.
     } finally {
       setBookingSlotKey(null)
     }
@@ -168,9 +241,9 @@ function MachineDetailPage() {
         <section className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">{machine.name}</h1>
-            {machine.description && (
+            {machine.description ? (
               <p className="mt-1 text-sm text-muted-foreground">{machine.description}</p>
-            )}
+            ) : null}
           </div>
           {eligibility.eligible ? (
             <Badge variant="success">Eligible</Badge>
@@ -190,19 +263,19 @@ function MachineDetailPage() {
                 <p className="mb-2 text-sm font-medium">Training requirements</p>
                 {eligibility.requirements.length > 0 ? (
                   <ul className="space-y-2">
-                    {eligibility.requirements.map((req) => (
+                    {eligibility.requirements.map((requirement) => (
                       <li
-                        key={req.moduleId}
+                        key={requirement.moduleId}
                         className="flex items-start justify-between gap-3 rounded-lg border p-3"
                       >
                         <div>
-                          <p className="text-sm font-medium">{req.moduleTitle}</p>
+                          <p className="text-sm font-medium">{requirement.moduleTitle}</p>
                           <p className="text-xs text-muted-foreground">
-                            {req.watchedPercent}% watched / {req.requiredPercent}% required
+                            {requirement.watchedPercent}% watched / {requirement.requiredPercent}% required
                           </p>
                         </div>
-                        <Badge variant={req.completed ? 'success' : 'warning'}>
-                          {req.completed ? 'Complete' : 'Incomplete'}
+                        <Badge variant={requirement.completed ? 'success' : 'warning'}>
+                          {requirement.completed ? 'Complete' : 'Incomplete'}
                         </Badge>
                       </li>
                     ))}
@@ -243,7 +316,7 @@ function MachineDetailPage() {
                 </Button>
               ) : (
                 <>
-                  {outstandingEligibilityReasons.length > 0 && (
+                  {outstandingEligibilityReasons.length > 0 ? (
                     <ul className="space-y-2">
                       {outstandingEligibilityReasons.map((reason, index) => (
                         <li key={index} className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
@@ -251,15 +324,15 @@ function MachineDetailPage() {
                         </li>
                       ))}
                     </ul>
-                  )}
+                  ) : null}
 
-                  {eligibility.requirements.some((r) => !r.completed) && (
+                  {eligibility.requirements.some((requirement) => !requirement.completed) ? (
                     <Button asChild variant="outline">
                       <Link to="/training">Go to training</Link>
                     </Button>
-                  )}
+                  ) : null}
 
-                  {trainingComplete && !eligibility.hasCheckout && (
+                  {trainingComplete && !eligibility.hasCheckout ? (
                     <div className="space-y-3">
                       <p className="text-sm text-muted-foreground">
                         Training is complete. Request your in-person checkout appointment.
@@ -269,12 +342,12 @@ function MachineDetailPage() {
                         <strong>{trainingDurationLabel}</strong>.
                       </p>
 
-                      {checkoutMessage && (
+                      {checkoutMessage ? (
                         <Alert className="border-emerald-200 bg-emerald-50 text-emerald-900">
                           <AlertTitle>Checkout update</AlertTitle>
                           <AlertDescription>{checkoutMessage}</AlertDescription>
                         </Alert>
-                      )}
+                      ) : null}
 
                       {checkoutSlots.length > 0 ? (
                         <div className="space-y-2">
@@ -314,29 +387,31 @@ function MachineDetailPage() {
                         </p>
                       )}
                     </div>
-                  )}
+                  ) : null}
                 </>
               )}
             </CardContent>
           </Card>
         </section>
 
-        {requirements.length > 0 && (
+        {requirements.length > 0 ? (
           <section>
             <h2 className="mb-3 text-xl font-semibold tracking-tight">Required training modules</h2>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-              {requirements.map((req) => {
-                const status = eligibility.requirements.find((r) => r.moduleId === req.moduleId)
+              {requirements.map((requirement) => {
+                const status = eligibility.requirements.find(
+                  (item) => item.moduleId === requirement.moduleId
+                )
                 return (
                   <Link
-                    key={req.moduleId}
+                    key={requirement.moduleId}
                     to="/training/$moduleId"
-                    params={{ moduleId: req.moduleId }}
+                    params={{ moduleId: requirement.moduleId }}
                     className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <Card className="h-full transition-shadow hover:shadow-md">
                       <CardContent className="flex items-center justify-between gap-3 pt-6">
-                        <p className="text-sm font-medium">{req.module.title}</p>
+                        <p className="text-sm font-medium">{requirement.module.title}</p>
                         {status?.completed ? (
                           <Badge variant="success">Done</Badge>
                         ) : (
@@ -349,7 +424,7 @@ function MachineDetailPage() {
               })}
             </div>
           </section>
-        )}
+        ) : null}
 
         <section>
           <h2 className="mb-3 text-xl font-semibold tracking-tight">Upcoming reservation schedule</h2>
@@ -378,7 +453,10 @@ function MachineDetailPage() {
                           {formatDateTime(booking.endTime)}
                         </p>
                       </div>
-                      <Badge variant={getReservationStatusVariant(booking.status)} className="w-fit capitalize">
+                      <Badge
+                        variant={getReservationStatusVariant(booking.status)}
+                        className="w-fit capitalize"
+                      >
                         {booking.status}
                       </Badge>
                     </div>

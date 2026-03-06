@@ -1,7 +1,9 @@
+import { queryOptions, useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import {
   getWatchedRangeSeconds,
   normalizeWatchedRanges,
@@ -12,12 +14,13 @@ import { db, trainingModules } from '~/lib/db'
 import { normalizeYouTubeId } from '~/lib/youtube'
 import { getModuleProgress } from '~/server/services/training'
 import { YouTubePlayer } from '~/components/YouTubePlayer'
-import { updateProgress } from '~/server/api/training'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { Progress } from '~/components/ui/progress'
+import { queryKeys } from '~/lib/query/keys'
+import { updateProgress } from '~/server/api/training'
 
 const getModuleData = createServerFn({ method: 'GET' })
   .inputValidator((data: { moduleId: string }) => data)
@@ -50,16 +53,21 @@ const getModuleData = createServerFn({ method: 'GET' })
     return { module, progress, hasValidVideoId: Boolean(normalizedVideoId) }
   })
 
+const trainingModuleDataQueryOptions = (moduleId: string) =>
+  queryOptions({
+    queryKey: queryKeys.training.module(moduleId),
+    queryFn: () => getModuleData({ data: { moduleId } }),
+  })
+
 export const Route = createFileRoute('/training/$moduleId')({
   component: TrainingModulePage,
-  loader: async ({ params }) => {
-    return await getModuleData({ data: { moduleId: params.moduleId } })
-  },
 })
 
 function TrainingModulePage() {
-  const { module, progress, hasValidVideoId } = Route.useLoaderData()
-  const [currentProgress, setCurrentProgress] = useState(progress?.percentComplete || 0)
+  const { moduleId } = Route.useParams()
+  const moduleQuery = useQuery(trainingModuleDataQueryOptions(moduleId))
+
+  const [currentProgress, setCurrentProgress] = useState(0)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
   const pendingRef = useRef<{
@@ -70,6 +78,34 @@ function TrainingModulePage() {
     videoDuration: number
     ended: boolean
   } | null>(null)
+
+  useEffect(() => {
+    const nextProgress = moduleQuery.data?.progress?.percentComplete || 0
+    setCurrentProgress(nextProgress)
+  }, [moduleId, moduleQuery.data?.progress?.percentComplete])
+
+  if (moduleQuery.isPending && typeof moduleQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading training module..." />
+  }
+
+  if (moduleQuery.isError && typeof moduleQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load this training module."
+        onRetry={() => {
+          void moduleQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const module = moduleQuery.data?.module
+  const progress = moduleQuery.data?.progress
+  const hasValidVideoId = moduleQuery.data?.hasValidVideoId ?? false
+
+  if (!module) {
+    return <QueryErrorScreen message="Training module not found." />
+  }
 
   const getNormalizedWatchedSeconds = useCallback(
     (watchedSeconds: number, watchedRanges: WatchedRange[], videoDuration: number) => {
@@ -85,7 +121,6 @@ function TrainingModulePage() {
     },
     [module.durationSeconds]
   )
-
   const saveProgress = useCallback(
     async (
       normalizedWatchedSeconds: number,
@@ -143,7 +178,7 @@ function TrainingModulePage() {
         )
       }
     },
-    [module.id, module.durationSeconds]
+    [module.durationSeconds, module.id]
   )
 
   const handleProgress = useCallback(
@@ -188,6 +223,7 @@ function TrainingModulePage() {
             }
         return
       }
+
       await saveProgress(
         normalizedWatchedSeconds,
         watchedRanges,
@@ -200,6 +236,10 @@ function TrainingModulePage() {
     [getNormalizedWatchedSeconds, saveProgress]
   )
 
+  if (!module) {
+    return <QueryErrorScreen message="Training module not found." />
+  }
+
   return (
     <div className="min-h-screen">
       <main className="container space-y-6 py-6 md:py-8">
@@ -210,9 +250,9 @@ function TrainingModulePage() {
         <section className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">{module.title}</h1>
-            {module.description && (
+            {module.description ? (
               <p className="mt-1 text-sm text-muted-foreground">{module.description}</p>
-            )}
+            ) : null}
           </div>
           {currentProgress >= 90 ? (
             <Badge variant="success">Complete</Badge>

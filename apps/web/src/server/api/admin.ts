@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
-import { eq, and, desc, asc } from 'drizzle-orm'
+import { eq, and, desc, asc, inArray } from 'drizzle-orm'
 import { requireManager, requireAdmin } from '../auth'
 import { normalizeYouTubeId } from '~/lib/youtube'
 import {
@@ -133,21 +133,28 @@ export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
   async () => {
     await requireAdmin()
 
+    const actionableCheckoutStatuses = ['pending', 'accepted'] as const
     const pendingRequests = await db.query.checkoutAppointments.findMany({
-      where: eq(checkoutAppointments.status, 'pending'),
+      where: inArray(checkoutAppointments.status, [...actionableCheckoutStatuses]),
       with: {
         user: true,
         machine: true,
         manager: true,
+        reviewer: true,
       },
-      orderBy: [asc(checkoutAppointments.startTime)],
+      orderBy: [asc(checkoutAppointments.createdAt)],
     })
 
+    const activeActionableRequests = pendingRequests.filter(
+      (item) => item.user.status === 'active'
+    )
+
     return {
-      pendingApprovals: pendingRequests
-        .filter((item) => item.user.status === 'active')
+      pendingApprovals: activeActionableRequests
+        .filter((item) => item.status === 'pending')
         .map((item) => ({
           appointmentId: item.id,
+          createdAt: item.createdAt,
           startTime: item.startTime,
           endTime: item.endTime,
           manager: {
@@ -166,6 +173,36 @@ export const getPendingCheckouts = createServerFn({ method: 'GET' }).handler(
           },
           trainingStatus: [],
         })),
+      actionableAppointments: activeActionableRequests.map((item) => ({
+        appointmentId: item.id,
+        createdAt: item.createdAt,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        status: item.status,
+        decisionReason: item.decisionReason,
+        reviewedAt: item.reviewedAt,
+        reviewer: item.reviewer
+          ? {
+              id: item.reviewer.id,
+              email: item.reviewer.email,
+              name: item.reviewer.name,
+            }
+          : null,
+        manager: {
+          id: item.manager.id,
+          email: item.manager.email,
+          name: item.manager.name,
+        },
+        user: {
+          id: item.user.id,
+          email: item.user.email,
+          name: item.user.name,
+        },
+        machine: {
+          id: item.machine.id,
+          name: item.machine.name,
+        },
+      })),
     }
   }
 )
@@ -451,6 +488,60 @@ export const setMachineRequirements = createServerFn({ method: 'POST' })
     }
 
     return { success: true }
+  })
+
+export const saveMachineEditor = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        machineId: z.string().uuid(),
+        name: z.string().min(1),
+        description: z.string().optional(),
+        resourceType: z.enum(['machine', 'tool']),
+        trainingDurationMinutes: trainingDurationMinutesSchema,
+        requirements: z.array(
+          z.object({
+            moduleId: z.string().uuid(),
+            requiredWatchPercent: z.number().min(0).max(100).default(90),
+          })
+        ),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    await requireManager()
+
+    const machine = await db.transaction(async (tx) => {
+      const [updatedMachine] = await tx
+        .update(machines)
+        .set({
+          name: data.name,
+          description: data.description,
+          resourceType: data.resourceType,
+          trainingDurationMinutes: data.trainingDurationMinutes,
+          updatedAt: new Date(),
+        })
+        .where(eq(machines.id, data.machineId))
+        .returning()
+
+      await tx
+        .delete(machineRequirements)
+        .where(eq(machineRequirements.machineId, data.machineId))
+
+      if (data.requirements.length > 0) {
+        await tx.insert(machineRequirements).values(
+          data.requirements.map((requirement) => ({
+            machineId: data.machineId,
+            moduleId: requirement.moduleId,
+            requiredWatchPercent: requirement.requiredWatchPercent,
+          }))
+        )
+      }
+
+      return updatedMachine
+    })
+
+    return { success: true, machine }
   })
 
 // ============ Training Module Management (Admin) ============

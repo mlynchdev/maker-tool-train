@@ -1,17 +1,34 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
-import { getMachines } from '~/server/api/machines'
+import { machinesListQueryOptions } from '~/lib/query/options'
 
 export const Route = createFileRoute('/machines/')({
   component: MachinesPage,
-  loader: async () => {
-    return await getMachines()
-  },
 })
 
 function MachinesPage() {
-  const { machines } = Route.useLoaderData()
+  const machinesQuery = useQuery(machinesListQueryOptions())
+  const machines = machinesQuery.data?.machines ?? []
+  const loading = machinesQuery.isPending && typeof machinesQuery.data === 'undefined'
+
+  if (loading) {
+    return <QueryLoadingScreen message="Loading machines..." />
+  }
+
+  if (machinesQuery.isError && typeof machinesQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load machines right now."
+        onRetry={() => {
+          void machinesQuery.refetch()
+        }}
+      />
+    )
+  }
 
   const eligibleMachines = machines.filter((machine) => machine.eligibility.eligible)
   const blockedMachines = machines.filter((machine) => !machine.eligibility.eligible)

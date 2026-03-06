@@ -1,12 +1,29 @@
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc, desc, eq, ne } from 'drizzle-orm'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { z } from 'zod'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
+import { queryKeys } from '~/lib/query/keys'
+import {
+  applyBookingModerationOptimistic,
+  applyBookingNotificationReadOptimistic,
+  applyBookingNotificationsClearOptimistic,
+  applyPendingReservationRequestCountDecrement,
+  applyUnreadCountDelta,
+} from '~/lib/query/optimistic-admin'
 import { db, reservations } from '~/lib/db'
-import { parseSSEMessage } from '~/lib/sse'
 import { moderateReservationRequest } from '~/server/api/admin'
-import { markMyNotificationRead } from '~/server/api/notifications'
+import {
+  markAllMyNotificationsRead,
+  markMyNotificationRead,
+} from '~/server/api/notifications'
 import { requireAdmin } from '~/server/auth/middleware'
 import { getNotificationsForUser } from '~/server/services/notifications'
 
@@ -66,18 +83,20 @@ const getBookingRequestsData = createServerFn({ method: 'GET' }).handler(async (
   return { user, pendingRequests, recentDecisions, bookingNotifications }
 })
 
+type BookingRequestsData = Awaited<ReturnType<typeof getBookingRequestsData>>
+type RequestRecord = BookingRequestsData['pendingRequests'][number]
+type DecisionInputState = Record<string, { reason: string; notes: string }>
+
+const bookingRequestsDataQueryOptions = queryOptions({
+  queryKey: queryKeys.admin.bookingRequests(),
+  queryFn: () => getBookingRequestsData(),
+})
+
 export const Route = createFileRoute('/admin/booking-requests')({
   validateSearch: (search) =>
     parseBookingRequestSearch(search as Record<string, unknown>),
   component: BookingRequestsPage,
-  loader: async () => {
-    return await getBookingRequestsData()
-  },
 })
-
-type BookingRequestsData = Awaited<ReturnType<typeof getBookingRequestsData>>
-type RequestRecord = BookingRequestsData['pendingRequests'][number]
-type DecisionInputState = Record<string, { reason: string; notes: string }>
 
 function getStatusBadgeClass(status: string) {
   if (status === 'approved' || status === 'confirmed' || status === 'completed') {
@@ -107,23 +126,20 @@ function matchesSearchQuery(request: RequestRecord, rawQuery: string) {
 }
 
 function BookingRequestsPage() {
+  const queryClient = useQueryClient()
   const search = Route.useSearch()
   const navigate = useNavigate({ from: '/admin/booking-requests' })
-  const {
-    user,
-    pendingRequests: initialPendingRequests,
-    recentDecisions: initialRecentDecisions,
-    bookingNotifications: initialNotifications,
-  } = Route.useLoaderData()
+  const bookingRequestsQuery = useQuery(bookingRequestsDataQueryOptions)
 
-  const [pendingRequests, setPendingRequests] = useState(initialPendingRequests)
-  const [recentDecisions, setRecentDecisions] = useState(initialRecentDecisions)
-  const [bookingNotifications, setBookingNotifications] = useState(initialNotifications)
   const [decisionInputs, setDecisionInputs] = useState<DecisionInputState>({})
   const [processingRequestId, setProcessingRequestId] = useState<string | null>(null)
   const [markingNotificationId, setMarkingNotificationId] = useState<string | null>(null)
   const [markingAllNotifications, setMarkingAllNotifications] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
+
+  const pendingRequests = bookingRequestsQuery.data?.pendingRequests ?? []
+  const recentDecisions = bookingRequestsQuery.data?.recentDecisions ?? []
+  const bookingNotifications = bookingRequestsQuery.data?.bookingNotifications ?? []
+  const refreshing = bookingRequestsQuery.isFetching
 
   const formatDateTime = (value: Date) =>
     new Date(value).toLocaleString('en-US', {
@@ -171,16 +187,208 @@ function BookingRequestsPage() {
   )
 
   const refreshRequests = useCallback(async () => {
-    setRefreshing(true)
-    try {
-      const latest = await getBookingRequestsData()
-      setPendingRequests(latest.pendingRequests)
-      setRecentDecisions(latest.recentDecisions)
-      setBookingNotifications(latest.bookingNotifications)
-    } finally {
-      setRefreshing(false)
-    }
-  }, [])
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.bookingRequests() }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.admin.pendingReservationRequestCount(),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.admin.pendingReservationRequests(),
+      }),
+    ])
+  }, [queryClient])
+
+  const moderateRequestMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to update request',
+    },
+    mutationFn: async (variables: {
+      reservationId: string
+      decision: 'approve' | 'reject' | 'cancel'
+      reason?: string
+      notes?: string
+    }) => {
+      const result = await moderateReservationRequest({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to update request')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: queryKeys.admin.bookingRequests() }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingReservationRequestCount(),
+        }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.admin.pendingReservationRequests(),
+        }),
+      ])
+
+      const previousData = queryClient.getQueryData<BookingRequestsData>(
+        queryKeys.admin.bookingRequests()
+      )
+      const previousPendingCount = queryClient.getQueryData<{ count: number }>(
+        queryKeys.admin.pendingReservationRequestCount()
+      )
+
+      queryClient.setQueryData<BookingRequestsData>(
+        queryKeys.admin.bookingRequests(),
+        (current) => applyBookingModerationOptimistic(current, variables)
+      )
+
+      queryClient.setQueryData<{ count: number }>(
+        queryKeys.admin.pendingReservationRequestCount(),
+        applyPendingReservationRequestCountDecrement
+      )
+
+      return { previousData, previousPendingCount }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(
+          queryKeys.admin.bookingRequests(),
+          context.previousData
+        )
+      }
+      if (context?.previousPendingCount) {
+        queryClient.setQueryData(
+          queryKeys.admin.pendingReservationRequestCount(),
+          context.previousPendingCount
+        )
+      }
+    },
+    onSettled: () => {
+      void refreshRequests()
+    },
+  })
+
+  const markNotificationReadMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to mark notification as read',
+    },
+    mutationFn: async (variables: { notificationId: string }) => {
+      const result = await markMyNotificationRead({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error('Failed to mark notification as read')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: queryKeys.admin.bookingRequests() }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.notifications.unreadCount(),
+        }),
+      ])
+
+      const previousData = queryClient.getQueryData<BookingRequestsData>(
+        queryKeys.admin.bookingRequests()
+      )
+      const previousUnreadCount = queryClient.getQueryData<{ count: number }>(
+        queryKeys.notifications.unreadCount()
+      )
+
+      queryClient.setQueryData<BookingRequestsData>(
+        queryKeys.admin.bookingRequests(),
+        (current) => applyBookingNotificationReadOptimistic(current, variables.notificationId)
+      )
+
+      queryClient.setQueryData<{ count: number }>(
+        queryKeys.notifications.unreadCount(),
+        (current) => applyUnreadCountDelta(current, -1)
+      )
+
+      return { previousData, previousUnreadCount }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(
+          queryKeys.admin.bookingRequests(),
+          context.previousData
+        )
+      }
+      if (context?.previousUnreadCount) {
+        queryClient.setQueryData(
+          queryKeys.notifications.unreadCount(),
+          context.previousUnreadCount
+        )
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.notifications.unreadCount(),
+      })
+    },
+  })
+
+  const markAllNotificationsReadMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to mark notifications as read',
+    },
+    mutationFn: async (_variables: { notificationIds: string[] }) => {
+      await markAllMyNotificationsRead()
+    },
+    onMutate: async (variables) => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: queryKeys.admin.bookingRequests() }),
+        queryClient.cancelQueries({
+          queryKey: queryKeys.notifications.unreadCount(),
+        }),
+      ])
+
+      const previousData = queryClient.getQueryData<BookingRequestsData>(
+        queryKeys.admin.bookingRequests()
+      )
+      const previousUnreadCount = queryClient.getQueryData<{ count: number }>(
+        queryKeys.notifications.unreadCount()
+      )
+
+      queryClient.setQueryData<BookingRequestsData>(
+        queryKeys.admin.bookingRequests(),
+        (current) => applyBookingNotificationsClearOptimistic(current)
+      )
+
+      queryClient.setQueryData<{ count: number }>(
+        queryKeys.notifications.unreadCount(),
+        (current) => applyUnreadCountDelta(current, -variables.notificationIds.length)
+      )
+
+      return { previousData, previousUnreadCount }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(
+          queryKeys.admin.bookingRequests(),
+          context.previousData
+        )
+      }
+      if (context?.previousUnreadCount) {
+        queryClient.setQueryData(
+          queryKeys.notifications.unreadCount(),
+          context.previousUnreadCount
+        )
+      }
+    },
+    onSettled: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.admin.bookingRequests(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.notifications.unreadCount(),
+        }),
+      ])
+    },
+  })
 
   const updateDecisionInput = (
     reservationId: string,
@@ -209,19 +417,12 @@ function BookingRequestsPage() {
     const notes = input?.notes.trim()
 
     try {
-      const result = await moderateReservationRequest({
-        data: {
-          reservationId,
-          decision,
-          reason: reason || undefined,
-          notes: notes || undefined,
-        },
+      await moderateRequestMutation.mutateAsync({
+        reservationId,
+        decision,
+        reason: reason || undefined,
+        notes: notes || undefined,
       })
-
-      if (!result.success) {
-        alert(result.error || 'Failed to update request')
-        return
-      }
 
       setDecisionInputs((prev) => {
         if (!prev[reservationId]) return prev
@@ -229,10 +430,8 @@ function BookingRequestsPage() {
         delete next[reservationId]
         return next
       })
-
-      await refreshRequests()
     } catch {
-      alert('An error occurred while processing the request')
+      // Error handling and rollback is managed in mutation callbacks.
     } finally {
       setProcessingRequestId(null)
     }
@@ -241,12 +440,7 @@ function BookingRequestsPage() {
   const handleMarkNotificationRead = async (notificationId: string) => {
     setMarkingNotificationId(notificationId)
     try {
-      const result = await markMyNotificationRead({ data: { notificationId } })
-      if (!result.success) return
-
-      setBookingNotifications((prev) =>
-        prev.filter((notification) => notification.id !== notificationId)
-      )
+      await markNotificationReadMutation.mutateAsync({ notificationId })
     } finally {
       setMarkingNotificationId(null)
     }
@@ -257,38 +451,28 @@ function BookingRequestsPage() {
     setMarkingAllNotifications(true)
 
     try {
-      await Promise.all(
-        bookingNotifications.map((notification) =>
-          markMyNotificationRead({ data: { notificationId: notification.id } })
-        )
-      )
-      setBookingNotifications([])
+      await markAllNotificationsReadMutation.mutateAsync({
+        notificationIds: bookingNotifications.map((notification) => notification.id),
+      })
     } finally {
       setMarkingAllNotifications(false)
     }
   }
 
-  useEffect(() => {
-    const source = new EventSource('/api/sse/bookings')
+  if (bookingRequestsQuery.isPending && typeof bookingRequestsQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading booking requests..." />
+  }
 
-    source.onmessage = (event) => {
-      const message = parseSSEMessage(event.data)
-      if (!message) return
-      if (message.type === 'connected') return
-
-      if (message.event === 'booking' || message.event === 'notification') {
-        refreshRequests()
-      }
-    }
-
-    source.onerror = () => {
-      source.close()
-    }
-
-    return () => {
-      source.close()
-    }
-  }, [refreshRequests])
+  if (bookingRequestsQuery.isError && typeof bookingRequestsQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load booking requests."
+        onRetry={() => {
+          void bookingRequestsQuery.refetch()
+        }}
+      />
+    )
+  }
 
   return (
     <div>

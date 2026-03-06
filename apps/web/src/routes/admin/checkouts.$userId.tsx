@@ -1,11 +1,19 @@
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useState } from 'react'
-import { requireManager } from '~/server/auth/middleware'
-import { db, users, machines } from '~/lib/db'
-import { checkEligibility } from '~/server/services/eligibility'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
+import { db, machines, users } from '~/lib/db'
+import { queryKeys } from '~/lib/query/keys'
 import { approveCheckout, revokeCheckout } from '~/server/api/admin'
+import { requireManager } from '~/server/auth/middleware'
+import { checkEligibility } from '~/server/services/eligibility'
 
 const getUserCheckoutData = createServerFn({ method: 'GET' })
   .inputValidator((data: { userId: string }) => data)
@@ -41,10 +49,10 @@ const getUserCheckoutData = createServerFn({ method: 'GET' })
       allMachines.map(async (machine) => {
         const eligibility = await checkEligibility(member.id, machine.id)
         const hasCheckout = member.managerCheckouts.some(
-          (c) => c.machineId === machine.id
+          (checkout) => checkout.machineId === machine.id
         )
         const checkout = member.managerCheckouts.find(
-          (c) => c.machineId === machine.id
+          (checkout) => checkout.machineId === machine.id
         )
         return {
           machine,
@@ -58,45 +66,178 @@ const getUserCheckoutData = createServerFn({ method: 'GET' })
     return { currentUser, member, machineStatuses }
   })
 
+type UserCheckoutData = Awaited<ReturnType<typeof getUserCheckoutData>>
+
+const userCheckoutDataQueryOptions = (userId: string) =>
+  queryOptions({
+    queryKey: queryKeys.admin.userCheckouts(userId),
+    queryFn: () => getUserCheckoutData({ data: { userId } }),
+  })
+
 export const Route = createFileRoute('/admin/checkouts/$userId')({
   component: UserCheckoutPage,
-  loader: async ({ params }) => {
-    return await getUserCheckoutData({ data: { userId: params.userId } })
-  },
 })
 
 function UserCheckoutPage() {
-  const { currentUser, member, machineStatuses: initialStatuses } = Route.useLoaderData()
-  const [machineStatuses, setMachineStatuses] = useState(initialStatuses)
+  const { userId } = Route.useParams()
+  const queryClient = useQueryClient()
+  const userCheckoutsQuery = useQuery(userCheckoutDataQueryOptions(userId))
   const [processing, setProcessing] = useState<string | null>(null)
+
+  const approveCheckoutMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to approve checkout',
+    },
+    mutationFn: async (variables: { memberId: string; machineId: string }) => {
+      const result = await approveCheckout({
+        data: {
+          userId: variables.memberId,
+          machineId: variables.machineId,
+        },
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to approve checkout')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.admin.userCheckouts(userId) })
+      const previousData = queryClient.getQueryData<UserCheckoutData>(
+        queryKeys.admin.userCheckouts(userId)
+      )
+
+      queryClient.setQueryData<UserCheckoutData>(
+        queryKeys.admin.userCheckouts(userId),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            machineStatuses: current.machineStatuses.map((status) =>
+              status.machine.id === variables.machineId
+                ? {
+                    ...status,
+                    hasCheckout: true,
+                    eligibility: { ...status.eligibility, hasCheckout: true },
+                  }
+                : status
+            ),
+          }
+        }
+      )
+
+      return { previousData }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(queryKeys.admin.userCheckouts(userId), context.previousData)
+      }
+    },
+    onSettled: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.userCheckouts(userId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.users() }),
+      ])
+    },
+  })
+
+  const revokeCheckoutMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to revoke checkout',
+    },
+    mutationFn: async (variables: { memberId: string; machineId: string }) => {
+      const result = await revokeCheckout({
+        data: {
+          userId: variables.memberId,
+          machineId: variables.machineId,
+        },
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to revoke checkout')
+      }
+
+      return result
+    },
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.admin.userCheckouts(userId) })
+      const previousData = queryClient.getQueryData<UserCheckoutData>(
+        queryKeys.admin.userCheckouts(userId)
+      )
+
+      queryClient.setQueryData<UserCheckoutData>(
+        queryKeys.admin.userCheckouts(userId),
+        (current) => {
+          if (!current) return current
+
+          return {
+            ...current,
+            machineStatuses: current.machineStatuses.map((status) =>
+              status.machine.id === variables.machineId
+                ? {
+                    ...status,
+                    hasCheckout: false,
+                    checkout: undefined,
+                    eligibility: { ...status.eligibility, hasCheckout: false },
+                  }
+                : status
+            ),
+          }
+        }
+      )
+
+      return { previousData }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(queryKeys.admin.userCheckouts(userId), context.previousData)
+      }
+    },
+    onSettled: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.userCheckouts(userId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.users() }),
+      ])
+    },
+  })
+
+  if (userCheckoutsQuery.isPending && typeof userCheckoutsQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading member checkout profile..." />
+  }
+
+  if (userCheckoutsQuery.isError && typeof userCheckoutsQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load member checkout profile."
+        onRetry={() => {
+          void userCheckoutsQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const currentUser = userCheckoutsQuery.data?.currentUser
+  const member = userCheckoutsQuery.data?.member
+  const machineStatuses = userCheckoutsQuery.data?.machineStatuses ?? []
+
+  if (!currentUser || !member) {
+    return <QueryErrorScreen message="Member checkout profile not found." />
+  }
+
   const canManageCheckouts = currentUser.role === 'admin'
 
   const handleApprove = async (machineId: string) => {
     setProcessing(machineId)
 
     try {
-      const result = await approveCheckout({
-        data: { userId: member.id, machineId },
+      await approveCheckoutMutation.mutateAsync({
+        memberId: member.id,
+        machineId,
       })
-
-      if (result.success) {
-        setMachineStatuses((prev) =>
-          prev.map((s) =>
-            s.machine.id === machineId
-              ? {
-                  ...s,
-                  hasCheckout: true,
-                  checkout: s.checkout,
-                  eligibility: { ...s.eligibility, hasCheckout: true },
-                }
-              : s
-          )
-        )
-      } else {
-        alert(result.error || 'Failed to approve')
-      }
-    } catch (error) {
-      alert('An error occurred')
+    } catch {
+      // Error handling and rollback is managed in mutation callbacks.
     } finally {
       setProcessing(null)
     }
@@ -108,28 +249,12 @@ function UserCheckoutPage() {
     setProcessing(machineId)
 
     try {
-      const result = await revokeCheckout({
-        data: { userId: member.id, machineId },
+      await revokeCheckoutMutation.mutateAsync({
+        memberId: member.id,
+        machineId,
       })
-
-      if (result.success) {
-        setMachineStatuses((prev) =>
-          prev.map((s) =>
-            s.machine.id === machineId
-              ? {
-                  ...s,
-                  hasCheckout: false,
-                  checkout: undefined,
-                  eligibility: { ...s.eligibility, hasCheckout: false },
-                }
-              : s
-          )
-        )
-      } else {
-        alert(result.error || 'Failed to revoke')
-      }
-    } catch (error) {
-      alert('An error occurred')
+    } catch {
+      // Error handling and rollback is managed in mutation callbacks.
     } finally {
       setProcessing(null)
     }
@@ -146,9 +271,8 @@ function UserCheckoutPage() {
           </div>
 
           <h1 className="mb-1">{member.name || member.email}</h1>
-          {member.name && <p className="text-muted mb-3">{member.email}</p>}
+          {member.name ? <p className="text-muted mb-3">{member.email}</p> : null}
 
-          {/* Training Progress */}
           <div className="card mb-3">
             <h3 className="card-title mb-2">Training Progress</h3>
             {member.trainingProgress.length > 0 ? (
@@ -198,7 +322,6 @@ function UserCheckoutPage() {
             )}
           </div>
 
-          {/* Machine Checkouts */}
           <div className="card">
             <h3 className="card-title mb-2">Machine Checkouts</h3>
             <div className="table-wrapper">
@@ -214,8 +337,9 @@ function UserCheckoutPage() {
                 <tbody>
                   {machineStatuses.map((status) => {
                     const trainingComplete = status.eligibility.requirements.every(
-                      (r) => r.completed
+                      (requirement) => requirement.completed
                     )
+
                     return (
                       <tr key={status.machine.id}>
                         <td data-label="Machine">{status.machine.name}</td>
@@ -226,8 +350,12 @@ function UserCheckoutPage() {
                             <span className="badge badge-success">Complete</span>
                           ) : (
                             <span className="badge badge-warning">
-                              {status.eligibility.requirements.filter((r) => r.completed).length}/
-                              {status.eligibility.requirements.length}
+                              {
+                                status.eligibility.requirements.filter(
+                                  (requirement) => requirement.completed
+                                ).length
+                              }
+                              /{status.eligibility.requirements.length}
                             </span>
                           )}
                         </td>
@@ -247,9 +375,7 @@ function UserCheckoutPage() {
                               onClick={() => handleRevoke(status.machine.id)}
                               disabled={processing === status.machine.id}
                             >
-                              {processing === status.machine.id
-                                ? 'Revoking...'
-                                : 'Revoke'}
+                              {processing === status.machine.id ? 'Revoking...' : 'Revoke'}
                             </button>
                           ) : trainingComplete ? (
                             <button
@@ -257,14 +383,10 @@ function UserCheckoutPage() {
                               onClick={() => handleApprove(status.machine.id)}
                               disabled={processing === status.machine.id}
                             >
-                              {processing === status.machine.id
-                                ? 'Approving...'
-                                : 'Approve'}
+                              {processing === status.machine.id ? 'Approving...' : 'Approve'}
                             </button>
                           ) : (
-                            <span className="text-muted text-small">
-                              Training incomplete
-                            </span>
+                            <span className="text-muted text-small">Training incomplete</span>
                           )}
                         </td>
                       </tr>

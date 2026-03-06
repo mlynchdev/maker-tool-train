@@ -1,10 +1,18 @@
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { eq, asc } from 'drizzle-orm'
-import { useState } from 'react'
-import { requireManager } from '~/server/auth/middleware'
+import { asc, eq } from 'drizzle-orm'
+import { useEffect, useState, type FormEvent } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { db, machines, trainingModules } from '~/lib/db'
-import { updateMachine, setMachineRequirements } from '~/server/api/admin'
+import { queryKeys } from '~/lib/query/keys'
+import { saveMachineEditor } from '~/server/api/admin'
+import { requireManager } from '~/server/auth/middleware'
 
 const TRAINING_DURATION_OPTIONS = [
   { value: 15, label: '15 minutes' },
@@ -41,84 +49,142 @@ const getMachineEditData = createServerFn({ method: 'GET' })
     return { user, machine, modules: moduleList }
   })
 
+const machineEditDataQueryOptions = (machineId: string) =>
+  queryOptions({
+    queryKey: queryKeys.admin.machineEditor(machineId),
+    queryFn: () => getMachineEditData({ data: { machineId } }),
+  })
+
 export const Route = createFileRoute('/admin/machines/$machineId')({
   component: EditMachinePage,
-  loader: async ({ params }) => {
-    return await getMachineEditData({ data: { machineId: params.machineId } })
-  },
 })
 
 function EditMachinePage() {
-  const { user, machine, modules } = Route.useLoaderData()
+  const { machineId } = Route.useParams()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const machineEditQuery = useQuery(machineEditDataQueryOptions(machineId))
 
-  const [name, setName] = useState(machine.name)
-  const [description, setDescription] = useState(machine.description || '')
-  const [resourceType, setResourceType] = useState<'machine' | 'tool'>(
-    machine.resourceType
-  )
-  const [trainingDurationMinutes, setTrainingDurationMinutes] = useState(
-    machine.trainingDurationMinutes
-  )
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [resourceType, setResourceType] = useState<'machine' | 'tool'>('machine')
+  const [trainingDurationMinutes, setTrainingDurationMinutes] = useState(30)
   const [selectedModules, setSelectedModules] = useState<
     Array<{ moduleId: string; percent: number }>
-  >(
-    machine.requirements.map((r) => ({
-      moduleId: r.moduleId,
-      percent: r.requiredWatchPercent,
-    }))
-  )
-  const [saving, setSaving] = useState(false)
+  >([])
+  const [initializedMachineId, setInitializedMachineId] = useState<string | null>(null)
 
-  const handleSave = async (e: React.FormEvent) => {
+  useEffect(() => {
+    const machine = machineEditQuery.data?.machine
+    if (!machine) return
+    if (initializedMachineId === machine.id) return
+
+    setName(machine.name)
+    setDescription(machine.description || '')
+    setResourceType(machine.resourceType)
+    setTrainingDurationMinutes(machine.trainingDurationMinutes)
+    setSelectedModules(
+      machine.requirements.map((requirement) => ({
+        moduleId: requirement.moduleId,
+        percent: requirement.requiredWatchPercent,
+      }))
+    )
+    setInitializedMachineId(machine.id)
+  }, [initializedMachineId, machineEditQuery.data?.machine])
+
+  const saveMachineMutation = useMutation({
+    meta: {
+      errorMessage: 'Failed to save changes',
+    },
+    mutationFn: async (variables: {
+      machineId: string
+      name: string
+      description?: string
+      resourceType: 'machine' | 'tool'
+      trainingDurationMinutes: number
+      requirements: Array<{ moduleId: string; requiredWatchPercent: number }>
+    }) => {
+      const result = await saveMachineEditor({
+        data: variables,
+      })
+
+      if (!result.success) {
+        throw new Error('Failed to save changes')
+      }
+
+      return result
+    },
+    onSettled: async (_data, error) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.machines() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.machineEditor(machineId) }),
+      ])
+
+      if (!error) {
+        navigate({ to: '/admin/machines' })
+      }
+    },
+  })
+
+  if (machineEditQuery.isPending && typeof machineEditQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading machine editor..." />
+  }
+
+  if (machineEditQuery.isError && typeof machineEditQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load machine details."
+        onRetry={() => {
+          void machineEditQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  const user = machineEditQuery.data?.user
+  const machine = machineEditQuery.data?.machine
+  const modules = machineEditQuery.data?.modules ?? []
+
+  if (!machine) {
+    return <QueryErrorScreen message="Machine not found." />
+  }
+
+  const handleSave = async (e: FormEvent) => {
     e.preventDefault()
-    setSaving(true)
 
     try {
-      // Update machine details
-      await updateMachine({
-        data: {
-          machineId: machine.id,
-          name,
-          description: description || undefined,
-          resourceType,
-          trainingDurationMinutes,
-        },
+      await saveMachineMutation.mutateAsync({
+        machineId: machine.id,
+        name,
+        description: description || undefined,
+        resourceType,
+        trainingDurationMinutes,
+        requirements: selectedModules.map((selected) => ({
+          moduleId: selected.moduleId,
+          requiredWatchPercent: selected.percent,
+        })),
       })
-
-      // Update requirements
-      await setMachineRequirements({
-        data: {
-          machineId: machine.id,
-          requirements: selectedModules.map((m) => ({
-            moduleId: m.moduleId,
-            requiredWatchPercent: m.percent,
-          })),
-        },
-      })
-
-      navigate({ to: '/admin/machines' })
-    } catch (error) {
-      alert('Failed to save changes')
-    } finally {
-      setSaving(false)
+    } catch {
+      // Error handling is managed by centralized mutation handlers.
     }
   }
 
   const toggleModule = (moduleId: string) => {
     setSelectedModules((prev) => {
-      const exists = prev.find((m) => m.moduleId === moduleId)
+      const exists = prev.find((module) => module.moduleId === moduleId)
       if (exists) {
-        return prev.filter((m) => m.moduleId !== moduleId)
-      } else {
-        return [...prev, { moduleId, percent: 90 }]
+        return prev.filter((module) => module.moduleId !== moduleId)
       }
+
+      return [...prev, { moduleId, percent: 90 }]
     })
   }
 
   const updatePercent = (moduleId: string, percent: number) => {
     setSelectedModules((prev) =>
-      prev.map((m) => (m.moduleId === moduleId ? { ...m, percent } : m))
+      prev.map((module) =>
+        module.moduleId === moduleId ? { ...module, percent } : module
+      )
     )
   }
 
@@ -187,7 +253,6 @@ function EditMachinePage() {
                   ))}
                 </select>
               </div>
-
             </div>
 
             <div className="card mb-3">
@@ -210,7 +275,7 @@ function EditMachinePage() {
                     <tbody>
                       {modules.map((module) => {
                         const selected = selectedModules.find(
-                          (m) => m.moduleId === module.id
+                          (item) => item.moduleId === module.id
                         )
                         return (
                           <tr key={module.id}>
@@ -223,7 +288,7 @@ function EditMachinePage() {
                             </td>
                             <td data-label="Module">{module.title}</td>
                             <td data-label="Min %">
-                              {selected && (
+                              {selected ? (
                                 <input
                                   type="number"
                                   className="form-input table-inline-input"
@@ -231,10 +296,13 @@ function EditMachinePage() {
                                   max="100"
                                   value={selected.percent}
                                   onChange={(e) =>
-                                    updatePercent(module.id, parseInt(e.target.value) || 90)
+                                    updatePercent(
+                                      module.id,
+                                      Number.parseInt(e.target.value, 10) || 90
+                                    )
                                   }
                                 />
-                              )}
+                              ) : null}
                             </td>
                           </tr>
                         )
@@ -245,7 +313,7 @@ function EditMachinePage() {
               ) : (
                 <p className="text-muted">
                   No training modules available.{' '}
-                  {user.role === 'admin' ? (
+                  {user?.role === 'admin' ? (
                     <Link to="/admin/training">Create a training module.</Link>
                   ) : (
                     'Ask an admin to create one in Training Admin.'
@@ -255,8 +323,12 @@ function EditMachinePage() {
             </div>
 
             <div className="action-row">
-              <button type="submit" className="btn btn-primary" disabled={saving}>
-                {saving ? 'Saving...' : 'Save Changes'}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={saveMachineMutation.isPending}
+              >
+                {saveMachineMutation.isPending ? 'Saving...' : 'Save Changes'}
               </button>
               <Link to="/admin/machines" className="btn btn-secondary">
                 Cancel

@@ -1,10 +1,13 @@
+import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc, desc, eq } from 'drizzle-orm'
 import { Search, Shield, Trash2, UserCheck, UserX, Wrench } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { requireManager } from '~/server/auth/middleware'
 import { db, machines, users } from '~/lib/db'
+import { queryKeys } from '~/lib/query/keys'
 import { approveCheckout, deleteUser, revokeCheckout, updateUser } from '~/server/api/admin'
 import { cn } from '~/lib/utils'
 import { Badge } from '~/components/ui/badge'
@@ -59,46 +62,75 @@ const getAdminUsersData = createServerFn({ method: 'GET' }).handler(async () => 
   }
 })
 
+type AdminUsersData = Awaited<ReturnType<typeof getAdminUsersData>>
+
+const adminUsersDataQueryOptions = queryOptions({
+  queryKey: queryKeys.admin.users(),
+  queryFn: () => getAdminUsersData(),
+})
+
 export const Route = createFileRoute('/admin/users')({
   component: AdminUsersPage,
-  loader: async () => {
-    return await getAdminUsersData()
-  },
 })
 
 function AdminUsersPage() {
-  const {
-    user: currentUser,
-    users: initialUsers,
-    machines: activeMachines,
-    checkoutPairs: initialCheckoutPairs,
-  } = Route.useLoaderData()
-  const canEditUsers = currentUser.role === 'admin'
-  type ManagedUser = (typeof initialUsers)[number]
+  const queryClient = useQueryClient()
+  const adminUsersQuery = useQuery(adminUsersDataQueryOptions)
+  type ManagedUser = AdminUsersData['users'][number]
 
   const buildCheckoutKey = (userId: string, machineId: string) => `${userId}:${machineId}`
 
-  const [userList, setUserList] = useState(initialUsers)
+  const [userList, setUserList] = useState<ManagedUser[]>([])
   const [userQuery, setUserQuery] = useState('')
   const [updating, setUpdating] = useState<string | null>(null)
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
   const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null)
   const [updatingCheckoutKey, setUpdatingCheckoutKey] = useState<string | null>(null)
-  const [checkoutKeys, setCheckoutKeys] = useState<Set<string>>(
-    () => new Set(initialCheckoutPairs.map((pair) => buildCheckoutKey(pair.userId, pair.machineId)))
-  )
+  const [checkoutKeys, setCheckoutKeys] = useState<Set<string>>(new Set())
   const [actionNotice, setActionNotice] = useState<{
     key: string
     tone: 'error' | 'success'
     message: string
   } | null>(null)
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshAdminUsersData = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.admin.users() })
 
   const normalizedQuery = userQuery.trim().toLowerCase()
   const roleNoticeKey = (userId: string) => `role:${userId}`
   const statusNoticeKey = (userId: string) => `status:${userId}`
   const deleteNoticeKey = (userId: string) => `delete:${userId}`
   const checkoutNoticeKey = (checkoutKey: string) => `checkout:${checkoutKey}`
+  const filteredUsers = useMemo(() => {
+    if (!normalizedQuery) return userList
+
+    return userList.filter((user) => {
+      const name = (user.name || '').toLowerCase()
+      const email = user.email.toLowerCase()
+      const role = user.role.toLowerCase()
+      const status = user.status.toLowerCase()
+
+      return (
+        name.includes(normalizedQuery) ||
+        email.includes(normalizedQuery) ||
+        role.includes(normalizedQuery) ||
+        status.includes(normalizedQuery)
+      )
+    })
+  }, [normalizedQuery, userList])
+
+  useEffect(() => {
+    if (!adminUsersQuery.data) return
+
+    setUserList(adminUsersQuery.data.users)
+    setCheckoutKeys(
+      new Set(
+        adminUsersQuery.data.checkoutPairs.map((pair) =>
+          buildCheckoutKey(pair.userId, pair.machineId)
+        )
+      )
+    )
+  }, [adminUsersQuery.data])
 
   const showActionNotice = (
     key: string,
@@ -143,23 +175,29 @@ function AdminUsersPage() {
     )
   }
 
-  const filteredUsers = useMemo(() => {
-    if (!normalizedQuery) return userList
+  if (adminUsersQuery.isPending && typeof adminUsersQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading user administration..." />
+  }
 
-    return userList.filter((user) => {
-      const name = (user.name || '').toLowerCase()
-      const email = user.email.toLowerCase()
-      const role = user.role.toLowerCase()
-      const status = user.status.toLowerCase()
+  if (adminUsersQuery.isError && typeof adminUsersQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load user administration data."
+        onRetry={() => {
+          void adminUsersQuery.refetch()
+        }}
+      />
+    )
+  }
 
-      return (
-        name.includes(normalizedQuery) ||
-        email.includes(normalizedQuery) ||
-        role.includes(normalizedQuery) ||
-        status.includes(normalizedQuery)
-      )
-    })
-  }, [normalizedQuery, userList])
+  const currentUser = adminUsersQuery.data?.user
+  const activeMachines = adminUsersQuery.data?.machines ?? []
+
+  if (!currentUser) {
+    return <QueryErrorScreen message="User administration data is unavailable." />
+  }
+
+  const canEditUsers = currentUser.role === 'admin'
 
   const memberUsers = filteredUsers.filter((user) => user.role === 'member')
   const activeMemberCount = memberUsers.filter((user) => user.status === 'active').length
@@ -181,6 +219,7 @@ function AdminUsersPage() {
       showActionNotice(roleNoticeKey(userId), 'Failed to update user role')
     } finally {
       setUpdating(null)
+      void refreshAdminUsersData()
     }
   }
 
@@ -200,6 +239,7 @@ function AdminUsersPage() {
       showActionNotice(statusNoticeKey(userId), 'Failed to update user status')
     } finally {
       setUpdating(null)
+      void refreshAdminUsersData()
     }
   }
 
@@ -238,6 +278,7 @@ function AdminUsersPage() {
       showActionNotice(deleteNoticeKey(user.id), 'Failed to delete user account')
     } finally {
       setDeletingUserId(null)
+      void refreshAdminUsersData()
     }
   }
 
@@ -311,6 +352,7 @@ function AdminUsersPage() {
       showActionNotice(checkoutNoticeKey(checkoutKey), 'Failed to update checkout access')
     } finally {
       setUpdatingCheckoutKey(null)
+      void refreshAdminUsersData()
     }
   }
 
