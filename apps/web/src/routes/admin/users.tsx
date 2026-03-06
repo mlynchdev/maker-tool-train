@@ -76,7 +76,6 @@ export const Route = createFileRoute('/admin/users')({
 function AdminUsersPage() {
   const queryClient = useQueryClient()
   const adminUsersQuery = useQuery(adminUsersDataQueryOptions)
-  const [dataInitialized, setDataInitialized] = useState(false)
   type ManagedUser = AdminUsersData['users'][number]
 
   const buildCheckoutKey = (userId: string, machineId: string) => `${userId}:${machineId}`
@@ -122,7 +121,6 @@ function AdminUsersPage() {
 
   useEffect(() => {
     if (!adminUsersQuery.data) return
-    if (dataInitialized) return
 
     setUserList(adminUsersQuery.data.users)
     setCheckoutKeys(
@@ -132,8 +130,7 @@ function AdminUsersPage() {
         )
       )
     )
-    setDataInitialized(true)
-  }, [adminUsersQuery.data, dataInitialized])
+  }, [adminUsersQuery.data])
 
   const showActionNotice = (
     key: string,

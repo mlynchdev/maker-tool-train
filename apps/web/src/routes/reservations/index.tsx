@@ -108,9 +108,14 @@ function ReservationsPage() {
       }
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS),
-      })
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.reservations.mine(RESERVATIONS_QUERY_OPTIONS),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.reservations.activeCount(),
+        }),
+      ])
     },
   })
 

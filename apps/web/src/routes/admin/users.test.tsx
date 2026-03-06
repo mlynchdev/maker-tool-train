@@ -131,9 +131,7 @@ describe('admin users route', () => {
       </QueryClientProvider>
     )
 
-    expect(
-      await screen.findByRole('heading', { name: 'User Management' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Suspend' })).toBeInTheDocument()
 
     await user.click(screen.getAllByRole('button', { name: 'Suspend' })[0])
 
@@ -172,7 +170,9 @@ describe('admin users route', () => {
       </QueryClientProvider>
     )
 
-    expect(await screen.findByText('Member Checkout Access')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Grant checkout' })
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Grant checkout' }))
 
@@ -190,5 +190,41 @@ describe('admin users route', () => {
         queryKey: queryKeys.admin.users(),
       })
     })
+  })
+
+  it('applies refreshed admin user data after query invalidation', async () => {
+    const { Route } = await import('./users')
+    const UsersPage = Route.options.component as () => ReactNode
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <UsersPage />
+      </QueryClientProvider>
+    )
+
+    expect(await screen.findByRole('button', { name: 'Suspend' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Grant checkout' })).toBeInTheDocument()
+
+    usersData = {
+      ...usersData,
+      users: usersData.users.map((user) =>
+        user.id === 'member-1' ? { ...user, status: 'suspended' as const } : user
+      ),
+      checkoutPairs: [{ userId: 'member-1', machineId: 'machine-1' }],
+    }
+
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.admin.users(),
+    })
+
+    expect(await screen.findByRole('button', { name: 'Activate' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Revoke checkout' })).toBeInTheDocument()
   })
 })

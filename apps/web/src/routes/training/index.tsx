@@ -51,11 +51,6 @@ function TrainingPage() {
     .filter((module) => !module.completedAt)
     .sort((a, b) => b.percentComplete - a.percentComplete)
 
-  const completedCount = completedModules.length
-  const totalCount = modules.length
-  const overallPercent =
-    totalCount > 0 ? Math.floor((completedCount / totalCount) * 100) : 0
-
   const renderModuleCard = (module: (typeof modules)[number]) => (
     <Link
       key={module.id}
