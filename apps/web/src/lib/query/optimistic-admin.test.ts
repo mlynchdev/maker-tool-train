@@ -55,6 +55,7 @@ describe('optimistic admin cache helpers', () => {
     client.setQueryData(pendingCountKey, { count: 2 })
     client.setQueryData(pendingCheckoutsKey, {
       pendingApprovals: [{ appointmentId: 'apt-1' }, { appointmentId: 'apt-2' }],
+      actionableAppointments: [{ appointmentId: 'apt-1' }, { appointmentId: 'apt-2' }],
     })
 
     const previousCheckouts = client.getQueryData(checkoutsKey)
@@ -75,7 +76,12 @@ describe('optimistic admin cache helpers', () => {
     client.setQueryData(pendingCountKey, applyPendingCheckoutCountDecrement)
     client.setQueryData(
       pendingCheckoutsKey,
-      (current: { pendingApprovals: Array<{ appointmentId: string }> } | undefined) =>
+      (current:
+        | {
+            pendingApprovals: Array<{ appointmentId: string }>
+            actionableAppointments?: Array<{ appointmentId: string }>
+          }
+        | undefined) =>
         applyPendingCheckoutRemoval(current, 'apt-1')
     )
 
@@ -86,9 +92,18 @@ describe('optimistic admin cache helpers', () => {
     })
     expect(client.getQueryData<{ count: number }>(pendingCountKey)).toEqual({ count: 1 })
     expect(
-      client.getQueryData<{ pendingApprovals: Array<{ appointmentId: string }> }>(
+      client.getQueryData<{
+        pendingApprovals: Array<{ appointmentId: string }>
+        actionableAppointments?: Array<{ appointmentId: string }>
+      }>(
         pendingCheckoutsKey
       )?.pendingApprovals
+    ).toEqual([{ appointmentId: 'apt-2' }])
+    expect(
+      client.getQueryData<{
+        pendingApprovals: Array<{ appointmentId: string }>
+        actionableAppointments?: Array<{ appointmentId: string }>
+      }>(pendingCheckoutsKey)?.actionableAppointments
     ).toEqual([{ appointmentId: 'apt-2' }])
 
     if (previousCheckouts) client.setQueryData(checkoutsKey, previousCheckouts)
@@ -101,6 +116,7 @@ describe('optimistic admin cache helpers', () => {
     expect(client.getQueryData(pendingCountKey)).toEqual({ count: 2 })
     expect(client.getQueryData(pendingCheckoutsKey)).toEqual({
       pendingApprovals: [{ appointmentId: 'apt-1' }, { appointmentId: 'apt-2' }],
+      actionableAppointments: [{ appointmentId: 'apt-1' }, { appointmentId: 'apt-2' }],
     })
   })
 

@@ -4,6 +4,7 @@ export interface PendingCheckoutCountData {
 
 export interface PendingCheckoutsData {
   pendingApprovals: Array<{ appointmentId: string }>
+  actionableAppointments?: Array<{ appointmentId: string }>
 }
 
 export interface CheckoutQueueItem {
@@ -92,6 +93,9 @@ export function applyPendingCheckoutRemoval(
   return {
     ...current,
     pendingApprovals: current.pendingApprovals.filter(
+      (item) => item.appointmentId !== appointmentId
+    ),
+    actionableAppointments: current.actionableAppointments?.filter(
       (item) => item.appointmentId !== appointmentId
     ),
   }
