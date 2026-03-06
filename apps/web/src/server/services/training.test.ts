@@ -340,6 +340,33 @@ describe('getModuleProgress', () => {
       percentComplete: 60,
     })
   })
+
+  it('caps normalized over-long stored ranges at 100 percent', async () => {
+    mocks.db.query.trainingProgress.findFirst.mockResolvedValue({
+      watchedSeconds: 20,
+      watchedRanges: [{ start: 0, end: 150 }],
+      lastPosition: 42,
+      completedAt: null,
+    })
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: 'module-1',
+      title: 'Safety Fundamentals',
+      durationSeconds: 100,
+    })
+
+    const result = await getModuleProgress('user-1', 'module-1')
+
+    expect(result).toEqual({
+      moduleId: 'module-1',
+      moduleTitle: 'Safety Fundamentals',
+      durationSeconds: 100,
+      watchedSeconds: 100,
+      watchedRanges: [{ start: 0, end: 100 }],
+      lastPosition: 42,
+      completedAt: null,
+      percentComplete: 100,
+    })
+  })
 })
 
 describe('getAllModulesWithProgress', () => {
@@ -392,6 +419,42 @@ describe('getAllModulesWithProgress', () => {
         lastPosition: 0,
         completedAt: undefined,
         percentComplete: 0,
+      },
+    ])
+  })
+
+  it('caps normalized over-long stored ranges at 100 percent', async () => {
+    mocks.db.query.trainingModules.findMany.mockResolvedValue([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+      },
+    ])
+    mocks.db.query.trainingProgress.findMany.mockResolvedValue([
+      {
+        moduleId: 'module-1',
+        watchedSeconds: 10,
+        watchedRanges: [{ start: 0, end: 150 }],
+        lastPosition: 95,
+        completedAt: null,
+      },
+    ])
+
+    const result = await getAllModulesWithProgress('user-1')
+
+    expect(result).toEqual([
+      {
+        id: 'module-1',
+        title: 'Safety Fundamentals',
+        durationSeconds: 100,
+        active: true,
+        watchedSeconds: 100,
+        watchedRanges: [{ start: 0, end: 100 }],
+        lastPosition: 95,
+        completedAt: null,
+        percentComplete: 100,
       },
     ])
   })

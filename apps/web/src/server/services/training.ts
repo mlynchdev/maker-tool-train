@@ -303,7 +303,7 @@ export async function getModuleProgress(userId: string, moduleId: string) {
     lastPosition: progress?.lastPosition || 0,
     completedAt: progress?.completedAt,
     percentComplete: module.durationSeconds > 0
-      ? Math.floor((watchedRangeSeconds / module.durationSeconds) * 100)
+      ? Math.min(Math.floor((watchedRangeSeconds / module.durationSeconds) * 100), 100)
       : 0,
   }
 }
@@ -336,7 +336,7 @@ export async function getAllModulesWithProgress(userId: string) {
       lastPosition: progress?.lastPosition || 0,
       completedAt: progress?.completedAt,
       percentComplete: module.durationSeconds > 0
-        ? Math.floor((watchedRangeSeconds / module.durationSeconds) * 100)
+        ? Math.min(Math.floor((watchedRangeSeconds / module.durationSeconds) * 100), 100)
         : 0,
     }
   })

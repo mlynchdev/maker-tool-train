@@ -69,7 +69,7 @@ function TrainingModulePage() {
 
   const saveProgress = useCallback(
     async (
-      watchedSeconds: number,
+      normalizedWatchedSeconds: number,
       watchedRanges: WatchedRange[],
       currentPosition: number,
       sessionDuration: number,
@@ -80,9 +80,6 @@ function TrainingModulePage() {
       setSaving(true)
 
       const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
-      const normalizedWatchedSeconds = watchedRanges.length > 0
-        ? Math.floor(getWatchedRangeSeconds(watchedRanges))
-        : watchedSeconds
       const localPercent = Math.min(
         Math.floor((normalizedWatchedSeconds / displayDuration) * 100),
         100
@@ -171,7 +168,7 @@ function TrainingModulePage() {
         return
       }
       await saveProgress(
-        watchedSeconds,
+        normalizedWatchedSeconds,
         watchedRanges,
         currentPosition,
         sessionDuration,
