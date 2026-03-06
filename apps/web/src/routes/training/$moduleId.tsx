@@ -4,19 +4,23 @@ import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
+import {
+  getWatchedRangeSeconds,
+  normalizeWatchedRanges,
+  type WatchedRange,
+} from '~/lib/watch-ranges'
+import { requireAuth } from '~/server/auth/middleware'
+import { db, trainingModules } from '~/lib/db'
+import { normalizeYouTubeId } from '~/lib/youtube'
+import { getModuleProgress } from '~/server/services/training'
 import { YouTubePlayer } from '~/components/YouTubePlayer'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card'
 import { Progress } from '~/components/ui/progress'
-import { db, trainingModules } from '~/lib/db'
 import { queryKeys } from '~/lib/query/keys'
-import type { WatchedRange } from '~/lib/watch-ranges'
-import { normalizeYouTubeId } from '~/lib/youtube'
 import { updateProgress } from '~/server/api/training'
-import { requireAuth } from '~/server/auth/middleware'
-import { getModuleProgress } from '~/server/services/training'
 
 const getModuleData = createServerFn({ method: 'GET' })
   .inputValidator((data: { moduleId: string }) => data)
@@ -103,9 +107,24 @@ function TrainingModulePage() {
     return <QueryErrorScreen message="Training module not found." />
   }
 
+  const getNormalizedWatchedSeconds = useCallback(
+    (watchedSeconds: number, watchedRanges: WatchedRange[], videoDuration: number) => {
+      const effectiveDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
+
+      if (watchedRanges.length === 0 || effectiveDuration <= 0) {
+        return watchedSeconds
+      }
+
+      return Math.floor(
+        getWatchedRangeSeconds(normalizeWatchedRanges(watchedRanges, effectiveDuration))
+      )
+    },
+    [module.durationSeconds]
+  )
+
   const saveProgress = useCallback(
     async (
-      watchedSeconds: number,
+      normalizedWatchedSeconds: number,
       watchedRanges: WatchedRange[],
       currentPosition: number,
       sessionDuration: number,
@@ -117,7 +136,7 @@ function TrainingModulePage() {
 
       const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
       const localPercent = Math.min(
-        Math.floor((watchedSeconds / displayDuration) * 100),
+        Math.floor((normalizedWatchedSeconds / displayDuration) * 100),
         100
       )
       setCurrentProgress(localPercent)
@@ -126,7 +145,7 @@ function TrainingModulePage() {
         const result = await updateProgress({
           data: {
             moduleId: module.id,
-            watchedSeconds,
+            watchedSeconds: normalizedWatchedSeconds,
             watchedRanges,
             currentPosition,
             sessionDuration,
@@ -179,11 +198,16 @@ function TrainingModulePage() {
       videoDuration: number
       ended: boolean
     }) => {
+      const normalizedWatchedSeconds = getNormalizedWatchedSeconds(
+        watchedSeconds,
+        watchedRanges,
+        videoDuration
+      )
       if (savingRef.current) {
         const pending = pendingRef.current
         pendingRef.current = pending
           ? {
-              watchedSeconds: Math.max(pending.watchedSeconds, watchedSeconds),
+              watchedSeconds: normalizedWatchedSeconds,
               watchedRanges,
               currentPosition,
               sessionDuration: Math.min(300, pending.sessionDuration + sessionDuration),
@@ -191,7 +215,7 @@ function TrainingModulePage() {
               ended: pending.ended || ended,
             }
           : {
-              watchedSeconds,
+              watchedSeconds: normalizedWatchedSeconds,
               watchedRanges,
               currentPosition,
               sessionDuration,
@@ -202,7 +226,7 @@ function TrainingModulePage() {
       }
 
       await saveProgress(
-        watchedSeconds,
+        normalizedWatchedSeconds,
         watchedRanges,
         currentPosition,
         sessionDuration,
@@ -210,7 +234,7 @@ function TrainingModulePage() {
         ended
       )
     },
-    [saveProgress]
+    [getNormalizedWatchedSeconds, saveProgress]
   )
 
   return (
