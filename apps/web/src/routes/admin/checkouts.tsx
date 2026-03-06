@@ -43,6 +43,15 @@ const DAY_OPTIONS = [
 const CHECKOUT_QUEUE_STATUSES = ['pending', 'accepted', 'rejected'] as const
 type CheckoutQueueStatus = (typeof CHECKOUT_QUEUE_STATUSES)[number]
 type QueueFilter = 'all' | CheckoutQueueStatus
+type CheckoutAction = 'reject' | 'pass' | 'fail' | 'cancel'
+
+interface CheckoutActionEditorState {
+  itemId: string
+  action: CheckoutAction
+  value: string
+  confirmed: boolean
+  error: string | null
+}
 
 function formatMinuteOfDay(value: number) {
   const hours24 = Math.floor(value / 60)
@@ -70,6 +79,52 @@ function matchesCheckoutSearchQuery(
   ]
 
   return values.some((value) => value.toLowerCase().includes(query))
+}
+
+function actionRequiresValue(action: CheckoutAction) {
+  return action === 'reject' || action === 'cancel'
+}
+
+function actionNeedsEarlyConfirmation(action: CheckoutAction, startTime: Date) {
+  return (action === 'pass' || action === 'fail') && startTime > new Date()
+}
+
+function getActionEditorCopy(action: CheckoutAction) {
+  switch (action) {
+    case 'reject':
+      return {
+        title: 'Reject checkout request',
+        description: 'A rejection reason is required before this request can be denied.',
+        inputLabel: 'Rejection reason',
+        inputPlaceholder: 'Enter the reason for denying this checkout request',
+        submitLabel: 'Submit rejection',
+      }
+    case 'pass':
+      return {
+        title: 'Mark checkout as passed',
+        description: 'Record a passing result for this checkout meeting.',
+        inputLabel: 'Pass notes',
+        inputPlaceholder: 'Optional notes for pass',
+        submitLabel: 'Record pass',
+      }
+    case 'fail':
+      return {
+        title: 'Mark checkout as failed',
+        description:
+          'Record a failed result for this checkout meeting. The member can retry later.',
+        inputLabel: 'Fail notes',
+        inputPlaceholder: 'Optional notes for fail',
+        submitLabel: 'Record fail',
+      }
+    case 'cancel':
+      return {
+        title: 'Cancel accepted checkout',
+        description: 'A cancellation reason is required before this meeting can be cancelled.',
+        inputLabel: 'Cancellation reason',
+        inputPlaceholder: 'Enter the cancellation reason',
+        submitLabel: 'Confirm cancellation',
+      }
+  }
 }
 
 const getCheckoutsData = createServerFn({ method: 'GET' }).handler(async () => {
@@ -121,6 +176,9 @@ function CheckoutsPage() {
   const [queueFilter, setQueueFilter] = useState<QueueFilter>('pending')
   const [queueSearch, setQueueSearch] = useState('')
   const [actingId, setActingId] = useState<string | null>(null)
+  const [actionEditor, setActionEditor] = useState<CheckoutActionEditorState | null>(
+    null
+  )
 
   const [selectedDayOfWeek, setSelectedDayOfWeek] = useState(6)
   const [ruleStartTime, setRuleStartTime] = useState('14:00')
@@ -374,25 +432,14 @@ function CheckoutsPage() {
     },
   })
 
-  const handleModerateRequest = async (
-    appointmentId: string,
-    decision: 'accept' | 'reject'
-  ) => {
-    let reason: string | undefined
-
-    if (decision === 'reject') {
-      const value = prompt('Rejection reason (required):')?.trim()
-      if (!value) return
-      reason = value
-    }
-
-    setActingId(`${appointmentId}:${decision}`)
+  const handleAcceptRequest = async (appointmentId: string) => {
+    setActionEditor(null)
+    setActingId(`${appointmentId}:accept`)
 
     try {
       await moderateRequestMutation.mutateAsync({
         appointmentId,
-        decision,
-        reason,
+        decision: 'accept',
       })
     } catch {
       // Error handling and rollback is managed in mutation callbacks.
@@ -401,52 +448,72 @@ function CheckoutsPage() {
     }
   }
 
-  const handleFinalize = async (
-    appointmentId: string,
-    resultType: 'pass' | 'fail',
-    startTime: Date
+  const openActionEditor = (
+    item: CheckoutsData['checkoutQueue'][number],
+    action: CheckoutAction
   ) => {
-    if (startTime > new Date()) {
-      const confirmed = confirm(
-        `This meeting is scheduled for ${formatDateTime(
-          startTime
-        )} and has not started yet. Record a ${resultType} result now?`
-      )
-      if (!confirmed) return
-    }
-
-    const notes = prompt(
-      resultType === 'pass'
-        ? 'Optional notes for pass:'
-        : 'Optional notes for fail (member can retry later):'
-    )
-
-    setActingId(`${appointmentId}:${resultType}`)
-
-    try {
-      await finalizeMeetingMutation.mutateAsync({
-        appointmentId,
-        result: resultType,
-        notes: notes?.trim() || undefined,
-      })
-    } catch {
-      // Error handling and rollback is managed in mutation callbacks.
-    } finally {
-      setActingId(null)
-    }
+    setActionEditor({
+      itemId: item.id,
+      action,
+      value: '',
+      confirmed: !actionNeedsEarlyConfirmation(action, new Date(item.startTime)),
+      error: null,
+    })
   }
 
-  const handleCancelAcceptedMeeting = async (appointmentId: string) => {
-    const reason = prompt('Cancellation reason (required):')?.trim()
-    if (!reason) return
+  const handleActionEditorSubmit = async (
+    item: CheckoutsData['checkoutQueue'][number]
+  ) => {
+    if (!actionEditor || actionEditor.itemId !== item.id) return
 
-    setActingId(`${appointmentId}:cancel`)
+    const trimmedValue = actionEditor.value.trim()
+
+    if (actionRequiresValue(actionEditor.action) && !trimmedValue) {
+      setActionEditor({
+        ...actionEditor,
+        error:
+          actionEditor.action === 'cancel'
+            ? 'Cancellation reason is required.'
+            : 'Rejection reason is required.',
+      })
+      return
+    }
+
+    if (
+      actionNeedsEarlyConfirmation(actionEditor.action, new Date(item.startTime)) &&
+      !actionEditor.confirmed
+    ) {
+      setActionEditor({
+        ...actionEditor,
+        error: `Confirm recording a ${actionEditor.action} result before the meeting starts.`,
+      })
+      return
+    }
+
+    const nextActingId = `${item.id}:${actionEditor.action}`
+    setActingId(nextActingId)
 
     try {
-      await cancelMeetingMutation.mutateAsync({
-        appointmentId,
-        reason,
-      })
+      if (actionEditor.action === 'reject') {
+        await moderateRequestMutation.mutateAsync({
+          appointmentId: item.id,
+          decision: 'reject',
+          reason: trimmedValue,
+        })
+      } else if (actionEditor.action === 'pass' || actionEditor.action === 'fail') {
+        await finalizeMeetingMutation.mutateAsync({
+          appointmentId: item.id,
+          result: actionEditor.action,
+          notes: trimmedValue || undefined,
+        })
+      } else {
+        await cancelMeetingMutation.mutateAsync({
+          appointmentId: item.id,
+          reason: trimmedValue,
+        })
+      }
+
+      setActionEditor(null)
     } catch {
       // Error handling and rollback is managed in mutation callbacks.
     } finally {
@@ -660,6 +727,8 @@ function CheckoutsPage() {
                     {filteredQueue.map((item) => {
                       const itemStartTime = new Date(item.startTime)
                       const started = itemStartTime <= new Date()
+                      const currentEditor =
+                        actionEditor?.itemId === item.id ? actionEditor : null
 
                       return (
                         <tr key={item.id}>
@@ -710,42 +779,95 @@ function CheckoutsPage() {
                           </td>
                           <td data-label='Actions'>
                             {item.status === 'pending' ? (
-                              <div className='flex gap-1'>
-                                <button
-                                  className='btn btn-success'
-                                  onClick={() =>
-                                    handleModerateRequest(item.id, 'accept')
-                                  }
-                                  disabled={actingId === `${item.id}:accept`}
-                                >
-                                  {actingId === `${item.id}:accept`
-                                    ? 'Saving...'
-                                    : 'Accept'}
-                                </button>
-                                <button
-                                  className='btn btn-danger'
-                                  onClick={() =>
-                                    handleModerateRequest(item.id, 'reject')
-                                  }
-                                  disabled={actingId === `${item.id}:reject`}
-                                >
-                                  {actingId === `${item.id}:reject`
-                                    ? 'Saving...'
-                                    : 'Reject'}
-                                </button>
-                              </div>
-                            ) : item.status === 'accepted' ? (
-                              <div className='space-y-1'>
+                              <div className='space-y-2'>
                                 <div className='flex gap-1'>
                                   <button
                                     className='btn btn-success'
-                                    onClick={() =>
-                                      handleFinalize(
-                                        item.id,
-                                        'pass',
-                                        itemStartTime,
-                                      )
-                                    }
+                                    onClick={() => handleAcceptRequest(item.id)}
+                                    disabled={actingId === `${item.id}:accept`}
+                                  >
+                                    {actingId === `${item.id}:accept`
+                                      ? 'Saving...'
+                                      : 'Accept'}
+                                  </button>
+                                  <button
+                                    className='btn btn-danger'
+                                    onClick={() => openActionEditor(item, 'reject')}
+                                    disabled={actingId === `${item.id}:reject`}
+                                  >
+                                    {actingId === `${item.id}:reject`
+                                      ? 'Saving...'
+                                      : 'Reject'}
+                                  </button>
+                                </div>
+                                {currentEditor && currentEditor.action === 'reject' && (
+                                  <div
+                                    className='border rounded p-2'
+                                    style={{ minWidth: '240px' }}
+                                  >
+                                    <div className='text-small mb-1'>
+                                      <strong>Reject checkout request</strong>
+                                    </div>
+                                    <p className='text-small text-muted mb-2'>
+                                      A rejection reason is required before this request can be denied.
+                                    </p>
+                                    <label
+                                      className='form-label'
+                                      htmlFor={`checkout-editor-${item.id}-reject`}
+                                    >
+                                      Rejection reason
+                                    </label>
+                                    <textarea
+                                      id={`checkout-editor-${item.id}-reject`}
+                                      className='form-input'
+                                      rows={3}
+                                      value={currentEditor.value}
+                                      onChange={(event) =>
+                                        setActionEditor({
+                                          ...currentEditor,
+                                          value: event.target.value,
+                                          error: null,
+                                        })
+                                      }
+                                      placeholder='Enter the reason for denying this checkout request'
+                                    />
+                                    {currentEditor.error && (
+                                      <p
+                                        className='text-small mt-1'
+                                        style={{ color: '#b91c1c' }}
+                                      >
+                                        {currentEditor.error}
+                                      </p>
+                                    )}
+                                    <div className='flex gap-1 mt-2'>
+                                      <button
+                                        className='btn btn-primary'
+                                        onClick={() =>
+                                          void handleActionEditorSubmit(item)
+                                        }
+                                        disabled={actingId === `${item.id}:reject`}
+                                      >
+                                        {actingId === `${item.id}:reject`
+                                          ? 'Saving...'
+                                          : 'Submit rejection'}
+                                      </button>
+                                      <button
+                                        className='btn btn-secondary'
+                                        onClick={() => setActionEditor(null)}
+                                        disabled={actingId === `${item.id}:reject`}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : item.status === 'accepted' ? (
+                              <div className='space-y-2'>
+                                <div className='flex gap-1'>
+                                  <button
+                                    className='btn btn-success'
+                                    onClick={() => openActionEditor(item, 'pass')}
                                     disabled={actingId === `${item.id}:pass`}
                                   >
                                     {actingId === `${item.id}:pass`
@@ -754,13 +876,7 @@ function CheckoutsPage() {
                                   </button>
                                   <button
                                     className='btn btn-danger'
-                                    onClick={() =>
-                                      handleFinalize(
-                                        item.id,
-                                        'fail',
-                                        itemStartTime,
-                                      )
-                                    }
+                                    onClick={() => openActionEditor(item, 'fail')}
                                     disabled={actingId === `${item.id}:fail`}
                                   >
                                     {actingId === `${item.id}:fail`
@@ -769,9 +885,7 @@ function CheckoutsPage() {
                                   </button>
                                   <button
                                     className='btn btn-secondary'
-                                    onClick={() =>
-                                      handleCancelAcceptedMeeting(item.id)
-                                    }
+                                    onClick={() => openActionEditor(item, 'cancel')}
                                     disabled={actingId === `${item.id}:cancel`}
                                   >
                                     {actingId === `${item.id}:cancel`
@@ -784,6 +898,104 @@ function CheckoutsPage() {
                                     Meeting not started
                                   </span>
                                 )}
+                                {currentEditor &&
+                                  (currentEditor.action === 'pass' ||
+                                    currentEditor.action === 'fail' ||
+                                    currentEditor.action === 'cancel') && (
+                                    <div
+                                      className='border rounded p-2'
+                                      style={{ minWidth: '240px' }}
+                                    >
+                                      <div className='text-small mb-1'>
+                                        <strong>
+                                          {getActionEditorCopy(currentEditor.action).title}
+                                        </strong>
+                                      </div>
+                                      <p className='text-small text-muted mb-2'>
+                                        {getActionEditorCopy(currentEditor.action).description}
+                                      </p>
+                                      <label
+                                        className='form-label'
+                                        htmlFor={`checkout-editor-${item.id}-${currentEditor.action}`}
+                                      >
+                                        {getActionEditorCopy(currentEditor.action).inputLabel}
+                                      </label>
+                                      <textarea
+                                        id={`checkout-editor-${item.id}-${currentEditor.action}`}
+                                        className='form-input'
+                                        rows={3}
+                                        value={currentEditor.value}
+                                        onChange={(event) =>
+                                          setActionEditor({
+                                            ...currentEditor,
+                                            value: event.target.value,
+                                            error: null,
+                                          })
+                                        }
+                                        placeholder={
+                                          getActionEditorCopy(currentEditor.action).inputPlaceholder
+                                        }
+                                      />
+                                      {actionNeedsEarlyConfirmation(
+                                        currentEditor.action,
+                                        itemStartTime
+                                      ) && (
+                                        <label
+                                          className='text-small mt-2'
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                          }}
+                                        >
+                                          <input
+                                            type='checkbox'
+                                            checked={currentEditor.confirmed}
+                                            onChange={(event) =>
+                                              setActionEditor({
+                                                ...currentEditor,
+                                                confirmed: event.target.checked,
+                                                error: null,
+                                              })
+                                            }
+                                          />
+                                          Confirm recording this result before the meeting starts.
+                                        </label>
+                                      )}
+                                      {currentEditor.error && (
+                                        <p
+                                          className='text-small mt-1'
+                                          style={{ color: '#b91c1c' }}
+                                        >
+                                          {currentEditor.error}
+                                        </p>
+                                      )}
+                                      <div className='flex gap-1 mt-2'>
+                                        <button
+                                          className='btn btn-primary'
+                                          onClick={() =>
+                                            void handleActionEditorSubmit(item)
+                                          }
+                                          disabled={
+                                            actingId === `${item.id}:${currentEditor.action}`
+                                          }
+                                        >
+                                          {actingId === `${item.id}:${currentEditor.action}`
+                                            ? 'Saving...'
+                                            : getActionEditorCopy(currentEditor.action).submitLabel}
+                                        </button>
+                                        <button
+                                          className='btn btn-secondary'
+                                          onClick={() => setActionEditor(null)}
+                                          disabled={
+                                            actingId === `${item.id}:${currentEditor.action}`
+                                          }
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
                               </div>
                             ) : (
                               <span className='text-small text-muted'>

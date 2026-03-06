@@ -490,6 +490,60 @@ export const setMachineRequirements = createServerFn({ method: 'POST' })
     return { success: true }
   })
 
+export const saveMachineEditor = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        machineId: z.string().uuid(),
+        name: z.string().min(1),
+        description: z.string().optional(),
+        resourceType: z.enum(['machine', 'tool']),
+        trainingDurationMinutes: trainingDurationMinutesSchema,
+        requirements: z.array(
+          z.object({
+            moduleId: z.string().uuid(),
+            requiredWatchPercent: z.number().min(0).max(100).default(90),
+          })
+        ),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }) => {
+    await requireManager()
+
+    const machine = await db.transaction(async (tx) => {
+      const [updatedMachine] = await tx
+        .update(machines)
+        .set({
+          name: data.name,
+          description: data.description,
+          resourceType: data.resourceType,
+          trainingDurationMinutes: data.trainingDurationMinutes,
+          updatedAt: new Date(),
+        })
+        .where(eq(machines.id, data.machineId))
+        .returning()
+
+      await tx
+        .delete(machineRequirements)
+        .where(eq(machineRequirements.machineId, data.machineId))
+
+      if (data.requirements.length > 0) {
+        await tx.insert(machineRequirements).values(
+          data.requirements.map((requirement) => ({
+            machineId: data.machineId,
+            moduleId: requirement.moduleId,
+            requiredWatchPercent: requirement.requiredWatchPercent,
+          }))
+        )
+      }
+
+      return updatedMachine
+    })
+
+    return { success: true, machine }
+  })
+
 // ============ Training Module Management (Admin) ============
 
 export const getPendingReservationRequests = createServerFn({ method: 'GET' }).handler(

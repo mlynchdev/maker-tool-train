@@ -1,4 +1,4 @@
-import { queryOptions, useMutation, useQuery } from '@tanstack/react-query'
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc } from 'drizzle-orm'
@@ -48,6 +48,7 @@ export const Route = createFileRoute('/admin/training')({
 })
 
 function AdminTrainingPage() {
+  const queryClient = useQueryClient()
   const adminTrainingQuery = useQuery(adminTrainingDataQueryOptions)
   const [moduleList, setModuleList] = useState<TrainingModuleListItem[]>([])
   const [modulesInitialized, setModulesInitialized] = useState(false)
@@ -154,6 +155,9 @@ function AdminTrainingPage() {
   const sortModules = (modules: typeof moduleList) =>
     [...modules].sort((a, b) => a.title.localeCompare(b.title))
 
+  const refreshTrainingModules = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.admin.trainingModules() })
+
   const getDurationSeconds = (
     autoSeconds: number | null,
     override: boolean,
@@ -233,6 +237,7 @@ function AdminTrainingPage() {
       setCreateError('Failed to create module')
     } finally {
       setSaving(false)
+      void refreshTrainingModules()
     }
   }
 
@@ -323,6 +328,7 @@ function AdminTrainingPage() {
       setEditError('Failed to update module')
     } finally {
       setSaving(false)
+      void refreshTrainingModules()
     }
   }
 
@@ -356,6 +362,9 @@ function AdminTrainingPage() {
       if (context?.previousModules) {
         setModuleList(context.previousModules)
       }
+    },
+    onSettled: () => {
+      void refreshTrainingModules()
     },
   })
 

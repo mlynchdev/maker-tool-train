@@ -9,6 +9,7 @@ import { queryKeys } from '~/lib/query/keys'
 import {
   cancelCheckoutAppointment,
   finalizeCheckoutMeeting,
+  moderateCheckoutRequest,
 } from '~/server/api/admin'
 
 let checkoutsData: {
@@ -177,7 +178,6 @@ describe('admin checkouts route', () => {
   })
 
   it('removes finalized appointments from the pending checkouts cache optimistically', async () => {
-    vi.stubGlobal('prompt', vi.fn(() => ''))
     vi.mocked(finalizeCheckoutMeeting).mockResolvedValue({
       success: true,
       data: {
@@ -213,6 +213,7 @@ describe('admin checkouts route', () => {
     await screen.findByRole('heading', { name: 'Checkout Request Queue' })
     await user.click(screen.getByRole('button', { name: 'Accepted' }))
     await user.click(screen.getByRole('button', { name: 'Pass' }))
+    await user.click(screen.getByRole('button', { name: 'Record pass' }))
 
     await waitFor(() => {
       expect(finalizeCheckoutMeeting).toHaveBeenCalledWith({
@@ -230,7 +231,6 @@ describe('admin checkouts route', () => {
   })
 
   it('removes cancelled appointments from the pending checkouts cache optimistically', async () => {
-    vi.stubGlobal('prompt', vi.fn(() => 'Manager unavailable'))
     vi.mocked(cancelCheckoutAppointment).mockResolvedValue({
       success: true,
       data: {} as never,
@@ -263,6 +263,11 @@ describe('admin checkouts route', () => {
     await screen.findByRole('heading', { name: 'Checkout Request Queue' })
     await user.click(screen.getByRole('button', { name: 'Accepted' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.type(
+      screen.getByLabelText('Cancellation reason'),
+      'Manager unavailable'
+    )
+    await user.click(screen.getByRole('button', { name: 'Confirm cancellation' }))
 
     await waitFor(() => {
       expect(cancelCheckoutAppointment).toHaveBeenCalledWith({
@@ -275,6 +280,112 @@ describe('admin checkouts route', () => {
 
     expect(queryClient.getQueryData(queryKeys.admin.pendingCheckouts())).toEqual({
       pendingApprovals: [{ appointmentId: 'pending-1' }],
+    })
+  })
+
+  it('requires an inline rejection reason before rejecting a request', async () => {
+    vi.mocked(moderateCheckoutRequest).mockResolvedValue({
+      success: true,
+      data: {} as never,
+    } as Awaited<ReturnType<typeof moderateCheckoutRequest>>)
+
+    const { Route } = await import('./checkouts')
+    const CheckoutsPage = Route.options.component as () => ReactNode
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CheckoutsPage />
+      </QueryClientProvider>
+    )
+
+    await screen.findByRole('heading', { name: 'Checkout Request Queue' })
+    await user.click(screen.getByRole('button', { name: 'Reject' }))
+    await user.click(screen.getByRole('button', { name: 'Submit rejection' }))
+
+    expect(screen.getByText('Rejection reason is required.')).toBeInTheDocument()
+    expect(moderateCheckoutRequest).not.toHaveBeenCalled()
+
+    await user.type(
+      screen.getByLabelText('Rejection reason'),
+      'Missing prerequisite'
+    )
+    await user.click(screen.getByRole('button', { name: 'Submit rejection' }))
+
+    await waitFor(() => {
+      expect(moderateCheckoutRequest).toHaveBeenCalledWith({
+        data: {
+          appointmentId: 'pending-1',
+          decision: 'reject',
+          reason: 'Missing prerequisite',
+        },
+      })
+    })
+  })
+
+  it('requires inline confirmation before finalizing a future meeting early', async () => {
+    checkoutsData.checkoutQueue[1] = {
+      ...checkoutsData.checkoutQueue[1],
+      startTime: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    }
+
+    vi.mocked(finalizeCheckoutMeeting).mockResolvedValue({
+      success: true,
+      data: {
+        appointment: {} as never,
+        checkoutGranted: false,
+      },
+    } as Awaited<ReturnType<typeof finalizeCheckoutMeeting>>)
+
+    const { Route } = await import('./checkouts')
+    const CheckoutsPage = Route.options.component as () => ReactNode
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CheckoutsPage />
+      </QueryClientProvider>
+    )
+
+    await screen.findByRole('heading', { name: 'Checkout Request Queue' })
+    await user.click(screen.getByRole('button', { name: 'Accepted' }))
+    await user.click(screen.getByRole('button', { name: 'Pass' }))
+    await user.click(screen.getByRole('button', { name: 'Record pass' }))
+
+    expect(
+      screen.getByText('Confirm recording a pass result before the meeting starts.')
+    ).toBeInTheDocument()
+    expect(finalizeCheckoutMeeting).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole('checkbox', {
+        name: 'Confirm recording this result before the meeting starts.',
+      })
+    )
+    await user.click(screen.getByRole('button', { name: 'Record pass' }))
+
+    await waitFor(() => {
+      expect(finalizeCheckoutMeeting).toHaveBeenCalledWith({
+        data: {
+          appointmentId: 'accepted-1',
+          result: 'pass',
+          notes: undefined,
+        },
+      })
     })
   })
 })

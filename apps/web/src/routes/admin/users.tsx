@@ -1,4 +1,4 @@
-import { queryOptions, useQuery } from '@tanstack/react-query'
+import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { asc, desc, eq } from 'drizzle-orm'
@@ -74,6 +74,7 @@ export const Route = createFileRoute('/admin/users')({
 })
 
 function AdminUsersPage() {
+  const queryClient = useQueryClient()
   const adminUsersQuery = useQuery(adminUsersDataQueryOptions)
   const [dataInitialized, setDataInitialized] = useState(false)
   type ManagedUser = AdminUsersData['users'][number]
@@ -93,6 +94,8 @@ function AdminUsersPage() {
     message: string
   } | null>(null)
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshAdminUsersData = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.admin.users() })
 
   const normalizedQuery = userQuery.trim().toLowerCase()
   const roleNoticeKey = (userId: string) => `role:${userId}`
@@ -219,6 +222,7 @@ function AdminUsersPage() {
       showActionNotice(roleNoticeKey(userId), 'Failed to update user role')
     } finally {
       setUpdating(null)
+      void refreshAdminUsersData()
     }
   }
 
@@ -238,6 +242,7 @@ function AdminUsersPage() {
       showActionNotice(statusNoticeKey(userId), 'Failed to update user status')
     } finally {
       setUpdating(null)
+      void refreshAdminUsersData()
     }
   }
 
@@ -276,6 +281,7 @@ function AdminUsersPage() {
       showActionNotice(deleteNoticeKey(user.id), 'Failed to delete user account')
     } finally {
       setDeletingUserId(null)
+      void refreshAdminUsersData()
     }
   }
 
@@ -349,6 +355,7 @@ function AdminUsersPage() {
       showActionNotice(checkoutNoticeKey(checkoutKey), 'Failed to update checkout access')
     } finally {
       setUpdatingCheckoutKey(null)
+      void refreshAdminUsersData()
     }
   }
 

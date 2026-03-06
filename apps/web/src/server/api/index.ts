@@ -52,6 +52,7 @@ export {
   finalizeCheckoutMeeting,
   createMachine,
   updateMachine,
+  saveMachineEditor,
   setMachineRequirements,
   createTrainingModule,
   updateTrainingModule,

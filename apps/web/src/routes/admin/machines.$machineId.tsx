@@ -11,7 +11,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { QueryErrorScreen, QueryLoadingScreen } from '~/components/query/QueryStateScreen'
 import { db, machines, trainingModules } from '~/lib/db'
 import { queryKeys } from '~/lib/query/keys'
-import { setMachineRequirements, updateMachine } from '~/server/api/admin'
+import { saveMachineEditor } from '~/server/api/admin'
 import { requireManager } from '~/server/auth/middleware'
 
 const TRAINING_DURATION_OPTIONS = [
@@ -104,37 +104,25 @@ function EditMachinePage() {
       trainingDurationMinutes: number
       requirements: Array<{ moduleId: string; requiredWatchPercent: number }>
     }) => {
-      const [machineResult, requirementsResult] = await Promise.all([
-        updateMachine({
-          data: {
-            machineId: variables.machineId,
-            name: variables.name,
-            description: variables.description,
-            resourceType: variables.resourceType,
-            trainingDurationMinutes: variables.trainingDurationMinutes,
-          },
-        }),
-        setMachineRequirements({
-          data: {
-            machineId: variables.machineId,
-            requirements: variables.requirements,
-          },
-        }),
-      ])
+      const result = await saveMachineEditor({
+        data: variables,
+      })
 
-      if (!machineResult.success || !requirementsResult.success) {
+      if (!result.success) {
         throw new Error('Failed to save changes')
       }
 
-      return machineResult
+      return result
     },
-    onSuccess: async () => {
+    onSettled: async (_data, error) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.admin.machines() }),
         queryClient.invalidateQueries({ queryKey: queryKeys.admin.machineEditor(machineId) }),
       ])
 
-      navigate({ to: '/admin/machines' })
+      if (!error) {
+        navigate({ to: '/admin/machines' })
+      }
     },
   })
 
