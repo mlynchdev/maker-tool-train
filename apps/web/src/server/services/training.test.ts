@@ -311,6 +311,39 @@ describe('updateTrainingProgress', () => {
     )
     expect(mocks.updateWhere).toHaveBeenCalledTimes(1)
   })
+
+  it('inserts a new progress record when no existing row is found', async () => {
+    mocks.db.query.trainingModules.findFirst.mockResolvedValue({
+      id: '00000000-0000-0000-0000-000000000001',
+      active: true,
+      durationSeconds: 100,
+    })
+
+    const result = await updateTrainingProgress(
+      'user-1',
+      makeUpdate({
+        watchedRanges: [{ start: 0, end: 60 }],
+        currentPosition: 60,
+        sessionDuration: 30,
+      })
+    )
+
+    expect(result).toEqual({
+      success: true,
+      watchedSeconds: 60,
+      percentComplete: 60,
+    })
+    expect(mocks.insertValues).toHaveBeenCalledWith({
+      userId: 'user-1',
+      moduleId: '00000000-0000-0000-0000-000000000001',
+      watchedSeconds: 60,
+      watchedRanges: [{ start: 0, end: 60 }],
+      lastPosition: 60,
+      completedAt: undefined,
+    })
+    expect(mocks.updateSet).not.toHaveBeenCalled()
+    expect(mocks.updateWhere).not.toHaveBeenCalled()
+  })
 })
 
 describe('getModuleProgress', () => {
