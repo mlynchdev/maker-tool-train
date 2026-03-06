@@ -309,7 +309,10 @@ describe('updateTrainingProgress', () => {
         updatedAt: expect.any(Date),
       })
     )
-    expect(mocks.updateWhere).toHaveBeenCalledTimes(1)
+    expect(mocks.db.update).toHaveBeenCalledWith(mocks.trainingProgress)
+    // Avoid asserting updateWhere call counts here: a videoDuration correction
+    // adds a separate trainingModules update before the trainingProgress update.
+    expect(mocks.insertValues).not.toHaveBeenCalled()
   })
 
   it('inserts a new progress record when no existing row is found', async () => {
