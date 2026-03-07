@@ -60,13 +60,16 @@ describe('reservations route', () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
     vi.stubGlobal('prompt', vi.fn(() => ''))
 
+    const startTime = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    const endTime = new Date(startTime.getTime() + 60 * 60 * 1000)
+
     reservationsData = {
       reservations: [
         {
           id: 'reservation-1',
           status: 'approved',
-          startTime: new Date('2026-03-07T19:00:00.000Z'),
-          endTime: new Date('2026-03-07T20:00:00.000Z'),
+          startTime,
+          endTime,
           machine: { name: 'Laser Cutter' },
         },
       ],
