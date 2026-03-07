@@ -1,5 +1,5 @@
 import { queryOptions, useQuery } from '@tanstack/react-query'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useParams } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -64,8 +64,11 @@ export const Route = createFileRoute('/training/$moduleId')({
 })
 
 function TrainingModulePage() {
-  const { moduleId } = Route.useParams()
+  const { moduleId } = useParams({ from: '/training/$moduleId' })
   const moduleQuery = useQuery(trainingModuleDataQueryOptions(moduleId))
+  const module = moduleQuery.data?.module
+  const progress = moduleQuery.data?.progress
+  const hasValidVideoId = moduleQuery.data?.hasValidVideoId ?? false
 
   const [currentProgress, setCurrentProgress] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -84,32 +87,9 @@ function TrainingModulePage() {
     setCurrentProgress(nextProgress)
   }, [moduleId, moduleQuery.data?.progress?.percentComplete])
 
-  if (moduleQuery.isPending && typeof moduleQuery.data === 'undefined') {
-    return <QueryLoadingScreen message="Loading training module..." />
-  }
-
-  if (moduleQuery.isError && typeof moduleQuery.data === 'undefined') {
-    return (
-      <QueryErrorScreen
-        message="Unable to load this training module."
-        onRetry={() => {
-          void moduleQuery.refetch()
-        }}
-      />
-    )
-  }
-
-  const module = moduleQuery.data?.module
-  const progress = moduleQuery.data?.progress
-  const hasValidVideoId = moduleQuery.data?.hasValidVideoId ?? false
-
-  if (!module) {
-    return <QueryErrorScreen message="Training module not found." />
-  }
-
   const getNormalizedWatchedSeconds = useCallback(
     (watchedSeconds: number, watchedRanges: WatchedRange[], videoDuration: number) => {
-      const effectiveDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
+      const effectiveDuration = videoDuration > 0 ? videoDuration : module?.durationSeconds ?? 0
 
       if (watchedRanges.length === 0 || effectiveDuration <= 0) {
         return watchedSeconds
@@ -119,7 +99,7 @@ function TrainingModulePage() {
         getWatchedRangeSeconds(normalizeWatchedRanges(watchedRanges, effectiveDuration))
       )
     },
-    [module.durationSeconds]
+    [module?.durationSeconds]
   )
   const saveProgress = useCallback(
     async (
@@ -130,12 +110,17 @@ function TrainingModulePage() {
       videoDuration: number,
       ended: boolean
     ) => {
+      if (!module) {
+        return
+      }
+
       savingRef.current = true
       setSaving(true)
 
       const displayDuration = videoDuration > 0 ? videoDuration : module.durationSeconds
+      const safeDisplayDuration = displayDuration > 0 ? displayDuration : 1
       const localPercent = Math.min(
-        Math.floor((normalizedWatchedSeconds / displayDuration) * 100),
+        Math.floor((normalizedWatchedSeconds / safeDisplayDuration) * 100),
         100
       )
       setCurrentProgress(localPercent)
@@ -178,7 +163,7 @@ function TrainingModulePage() {
         )
       }
     },
-    [module.durationSeconds, module.id]
+    [module?.id, module?.durationSeconds]
   )
 
   const handleProgress = useCallback(
@@ -235,6 +220,21 @@ function TrainingModulePage() {
     },
     [getNormalizedWatchedSeconds, saveProgress]
   )
+
+  if (moduleQuery.isPending && typeof moduleQuery.data === 'undefined') {
+    return <QueryLoadingScreen message="Loading training module..." />
+  }
+
+  if (moduleQuery.isError && typeof moduleQuery.data === 'undefined') {
+    return (
+      <QueryErrorScreen
+        message="Unable to load this training module."
+        onRetry={() => {
+          void moduleQuery.refetch()
+        }}
+      />
+    )
+  }
 
   if (!module) {
     return <QueryErrorScreen message="Training module not found." />
