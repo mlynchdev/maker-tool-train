@@ -34,10 +34,8 @@ vi.mock('@tanstack/react-router', () => ({
     children: ReactNode
     to?: string
   }) => createElement('a', { ...props, href: to ?? '#' }, children),
-  createFileRoute: () => (options: { component: unknown }) => ({
-    options,
-    useParams: () => ({ moduleId: '11111111-1111-1111-1111-111111111111' }),
-  }),
+  createFileRoute: () => (options: { component: unknown }) => ({ options }),
+  useParams: () => ({ moduleId: '11111111-1111-1111-1111-111111111111' }),
 }))
 
 vi.mock('@tanstack/react-start', () => ({

@@ -1,5 +1,5 @@
 import { queryOptions, useQuery } from '@tanstack/react-query'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useParams } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -64,7 +64,7 @@ export const Route = createFileRoute('/training/$moduleId')({
 })
 
 function TrainingModulePage() {
-  const { moduleId } = Route.useParams()
+  const { moduleId } = useParams({ from: '/training/$moduleId' })
   const moduleQuery = useQuery(trainingModuleDataQueryOptions(moduleId))
   const module = moduleQuery.data?.module
   const progress = moduleQuery.data?.progress
@@ -163,7 +163,7 @@ function TrainingModulePage() {
         )
       }
     },
-    [module]
+    [module?.id, module?.durationSeconds]
   )
 
   const handleProgress = useCallback(
