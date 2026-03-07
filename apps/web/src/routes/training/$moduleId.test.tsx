@@ -76,8 +76,6 @@ vi.mock('~/components/YouTubePlayer', () => ({
 
 describe('training module route', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.resetModules()
     resolveModuleData = null
     getModuleDataMock = vi.fn(
       () =>
@@ -85,6 +83,8 @@ describe('training module route', () => {
           resolveModuleData = resolve
         })
     )
+    vi.clearAllMocks()
+    vi.resetModules()
   })
 
   it('renders successfully after transitioning from loading to loaded state', async () => {
@@ -127,6 +127,6 @@ describe('training module route', () => {
 
     expect(await screen.findByRole('heading', { name: 'Laser Safety' })).toBeInTheDocument()
     expect(screen.getByTestId('youtube-player')).toHaveTextContent('laser123')
-    expect(screen.getByText('35%')).toBeInTheDocument()
+    expect(screen.getByText('35%', { selector: 'span' })).toBeInTheDocument()
   })
 })
